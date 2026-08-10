@@ -5,6 +5,6 @@ lightgbm>=3.3.0
 shap>=0.40.0
 matplotlib>=3.4.0
 plotly>=5.0.0
-dash>=2.0.0
+streamlit>=1.28.0
 geopy>=2.2.0
 pillow>=8.3.0
