@@ -1,0 +1,84 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Data (raw datasets - too large, download from source)
+data/florida_sold_2026.csv
+data/*.csv
+data/*.xlsx
+data/raw/
+
+# Large pickle files (rebuild from pipeline)
+*.pkl
+*.pickle
+
+# Credentials and secrets
+.aws/
+.gcp/
+credentials.json
+secrets.json
+.kaggle/
+api_key.txt
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+
+# Jupyter Notebooks (keep .ipynb, exclude checkpoints)
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Model artifacts (can be regenerated)
+models/*.pkl
+models/*.joblib
+
+# Reports & outputs (can be regenerated)
+reports/*.png
+reports/*.pdf
+reports/*.html
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+*.lnk
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+.~*
