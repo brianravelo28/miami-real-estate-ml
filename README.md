@@ -1,3 +1,14 @@
+---
+title: Miami Real Estate Price Predictor
+emoji: 🏠
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+sdk_version: 1.28.0
+app_file: app.py
+pinned: false
+---
+
 # 🏠 Miami Real Estate Price Predictor
 
 A production-ready machine learning pipeline that predicts residential property prices in Miami using geospatial features, neighborhood aggregations, and gradient boosting. Features explainable predictions with SHAP values and an interactive web dashboard.
