@@ -238,53 +238,44 @@ with tab1:
 with tab2:
     st.markdown("## Miami Real Estate Market")
 
-    try:
-        # Try to load/create neighborhood stats
-        st.info("""
-        📍 This tab shows neighborhood-level market insights.
+    st.info("""
+    📍 Miami Real Estate Market Overview
 
-        **Top Neighborhoods by Median Price:**
-        1. Brickell - $850K median
-        2. Miami Beach - $750K median
-        3. Wynwood - $650K median
-        4. Allapattah - $480K median
-        5. Little Havana - $420K median
-        """)
+    **Top Neighborhoods by Median Price:**
+    1. Brickell - $850K median
+    2. Miami Beach - $750K median
+    3. Wynwood - $650K median
+    4. Allapattah - $480K median
+    5. Little Havana - $420K median
+    """)
 
-        # Create a simple scatter plot of prices
-        sample_data = X_test.sample(min(100, len(X_test)), random_state=42).copy()
-        sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data))
-        sample_data['Lat'] = sample_data.iloc[:, 9]  # lat column
-        sample_data['Lon'] = sample_data.iloc[:, 10]  # lon column
+    # Price distribution chart
+    sample_data = X_test.sample(min(100, len(X_test)), random_state=42).copy()
+    sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data))
 
-        fig = go.Figure(data=go.Scattergeo(
-            lon=sample_data['Lon'],
-            lat=sample_data['Lat'],
-            mode='markers',
-            marker=dict(
-                size=8,
-                color=sample_data['Predicted_Price'],
-                colorscale='Viridis',
-                showscale=True,
-                colorbar=dict(title="Price ($)")
-            ),
-            text=[f"${p:,.0f}" for p in sample_data['Predicted_Price']],
-            hovertemplate="<b>Price: %{text}</b><br>Lat: %{lat}<br>Lon: %{lon}<extra></extra>"
-        ))
-
-        fig.update_layout(
-            geo=dict(
-                scope='usa',
-                center=dict(lat=25.77, lon=-80.14),
-                projection_type='mercator'
-            ),
-            height=500,
-            title="Miami Property Prices (Test Set Sample)"
+    fig = go.Figure(data=[
+        go.Histogram(
+            x=sample_data['Predicted_Price'],
+            nbinsx=20,
+            marker_color='steelblue'
         )
-        st.plotly_chart(fig, use_container_width=True)
+    ])
+    fig.update_layout(
+        title="Price Distribution (Test Set Sample)",
+        xaxis_title="Predicted Price ($)",
+        yaxis_title="Count",
+        height=400
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Could not load neighborhood data: {e}")
+    st.markdown("### Market Insights")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Median Price", f"${sample_data['Predicted_Price'].median():,.0f}")
+    with col2:
+        st.metric("Mean Price", f"${sample_data['Predicted_Price'].mean():,.0f}")
+    with col3:
+        st.metric("Price Range", f"${sample_data['Predicted_Price'].max() - sample_data['Predicted_Price'].min():,.0f}")
 
 # ============================================================================
 # TAB 3: MODEL DIAGNOSTICS
