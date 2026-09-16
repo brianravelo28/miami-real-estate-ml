@@ -8,7 +8,7 @@ import os
 # ============================================================================
 # PATHS
 # ============================================================================
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
 REPORTS_DIR = os.path.join(PROJECT_ROOT, 'reports')
@@ -40,11 +40,15 @@ DOWNTOWN_MIAMI = (25.7617, -80.1918)
 BRICKELL = (25.7582, -80.1911)
 MIAMI_BEACH = (25.7945, -80.1298)
 
-# Miami metro ZIP code prefixes (for filtering statewide data)
-MIAMI_ZIP_PREFIXES = [
-    '331',  # Miami, Coral Gables, Wynwood
-    '334',  # Miami Beach, Sunny Isles
-]
+# Target counties for filtering statewide data (matched via real ZIP-code geocoding,
+# not ZIP prefixes -- prefixes like 334 bleed into Palm Beach/Monroe counties)
+TARGET_COUNTIES = ['Miami-Dade', 'Broward']
+
+# Sanity bounding box around Miami-Dade + Broward, to catch occasional bad
+# ZIP-to-county geocodes (e.g. a ZIP mislabeled with the right county name
+# but coordinates on Florida's Gulf coast)
+METRO_LAT_BOUNDS = (25.10, 26.50)
+METRO_LON_BOUNDS = (-80.95, -79.90)
 
 # ============================================================================
 # DATA PROCESSING

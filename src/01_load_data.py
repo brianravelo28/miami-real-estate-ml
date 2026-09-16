@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import logging
+import pgeocode
 from real_estate_config import *
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -30,18 +31,39 @@ def load_data():
     return df
 
 def filter_miami_metro(df):
-    """Filter to Miami metro (ZIP codes starting with 331, 334)"""
-    
-    # Ensure zip is string
-    df['zip'] = df['zip'].astype(str).str.strip()
-    
-    # Filter by Miami ZIP prefixes
-    miami_mask = df['zip'].str[:3].isin(MIAMI_ZIP_PREFIXES)
-    df_miami = df[miami_mask].copy()
-    
-    logger.info(f"Filtered to Miami metro: {len(df_miami):,} records ({len(df_miami)/len(df)*100:.1f}%)")
-    
-    return df_miami
+    """Filter to Miami-Dade + Broward counties using real ZIP-code geocoding"""
+
+    # Ensure zip is a clean 5-digit string (raw column is float64, e.g. 33446.0)
+    df['zip'] = pd.to_numeric(df['zip'], errors='coerce').astype('Int64').astype(str).str.zfill(5)
+
+    # Geocode every unique ZIP once (real lat/lon/county from pgeocode, not a hardcoded lookup)
+    logger.info("Geocoding ZIP codes (pgeocode)...")
+    nomi = pgeocode.Nominatim('us')
+    unique_zips = df['zip'].unique().tolist()
+    geo = nomi.query_postal_code(unique_zips).set_index('postal_code')
+
+    df['county_name'] = df['zip'].map(geo['county_name'])
+    df['lat'] = df['zip'].map(geo['latitude'])
+    df['lon'] = df['zip'].map(geo['longitude'])
+
+    # Filter by actual county, not ZIP prefix (prefixes bleed into Palm Beach/Monroe counties)
+    metro_mask = df['county_name'].isin(TARGET_COUNTIES)
+    df_metro = df[metro_mask].copy()
+
+    # Sanity bounding box: catches occasional bad geocodes in the ZIP database
+    # (e.g. ZIP 33973 is mislabeled "Broward" but geocodes to Lehigh Acres/Lee County)
+    bounds_mask = (
+        df_metro['lat'].between(*METRO_LAT_BOUNDS) &
+        df_metro['lon'].between(*METRO_LON_BOUNDS)
+    )
+    dropped = (~bounds_mask).sum()
+    if dropped:
+        logger.info(f"  Dropped {dropped} record(s) with out-of-region coordinates (bad ZIP geocode)")
+    df_metro = df_metro[bounds_mask].copy()
+
+    logger.info(f"Filtered to {', '.join(TARGET_COUNTIES)}: {len(df_metro):,} records ({len(df_metro)/len(df)*100:.1f}%)")
+
+    return df_metro
 
 def validate_data(df):
     """Basic validation and cleaning"""
@@ -52,29 +74,10 @@ def validate_data(df):
     if 'year_built' in df.columns and 'yr_built' not in df.columns:
         df = df.rename(columns={'year_built': 'yr_built'})
 
-    # Generate synthetic lat/lon based on ZIP code if missing
-    if 'lat' not in df.columns or 'lon' not in df.columns:
-        logger.info("Generating synthetic lat/lon from ZIP codes...")
-        # Miami metro approximate coordinates
-        zip_coords = {
-            '331': (25.7617, -80.1918),  # Downtown Miami
-            '332': (25.9000, -80.2000),  # North Miami
-            '334': (25.7945, -80.1298),  # Miami Beach
-        }
-        # Default to downtown Miami
-        default_coords = (25.7617, -80.1918)
-
-        lats, lons = [], []
-        for zip_code in df['zip'].astype(str).str[:3]:
-            coords = zip_coords.get(zip_code, default_coords)
-            # Add small random noise to avoid exact duplicates
-            lat = coords[0] + np.random.normal(0, 0.01)
-            lon = coords[1] + np.random.normal(0, 0.01)
-            lats.append(lat)
-            lons.append(lon)
-
-        df['lat'] = lats
-        df['lon'] = lons
+    # lat/lon/county already assigned in filter_miami_metro via real ZIP geocoding.
+    # Add small jitter so multiple sales in the same ZIP don't stack exactly on the map.
+    df['lat'] = df['lat'] + np.random.normal(0, 0.005, size=len(df))
+    df['lon'] = df['lon'] + np.random.normal(0, 0.005, size=len(df))
 
     # Add flood_risk if missing (default to 'X' = no risk)
     if 'flood_risk' not in df.columns:

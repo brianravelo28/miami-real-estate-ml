@@ -15,6 +15,8 @@ import plotly.graph_objects as go
 import folium
 from streamlit_folium import st_folium
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Set page config
 st.set_page_config(
     page_title="Miami Real Estate Predictor",
@@ -30,9 +32,9 @@ st.set_page_config(
 @st.cache_resource
 def load_artifacts():
     """Load model, data, and SHAP values"""
-    model = pickle.load(open('models/lightgbm_miami_v1.pkl', 'rb'))
-    X_test = pickle.load(open('data/X_test.pkl', 'rb'))
-    y_test = pickle.load(open('data/y_test.pkl', 'rb'))
+    model = pickle.load(open(os.path.join(APP_DIR, 'models', 'lightgbm_miami_v1.pkl'), 'rb'))
+    X_test = pickle.load(open(os.path.join(APP_DIR, 'data', 'X_test.pkl'), 'rb'))
+    y_test = pickle.load(open(os.path.join(APP_DIR, 'data', 'y_test.pkl'), 'rb'))
 
     # Compute SHAP values once (cached)
     explainer = shap.TreeExplainer(model)
@@ -73,7 +75,7 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("R² Score", f"{r2:.4f}", "↑ 0.9874")
+        st.metric("R² Score", f"{r2:.4f}")
         st.metric("RMSE", f"{rmse:.4f}", "log scale")
     with col2:
         st.metric("MAE", f"{mae:.4f}", f"{pct_error:.1f}%")
@@ -82,7 +84,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📈 Dataset Info")
     st.info("""
-    - **Records**: 1,068 Miami properties
+    - **Records**: 990 Miami-Dade & Broward properties
     - **Features**: 20 engineered
     - **Date**: 2026
     - **Price Range**: $50K–$10M
@@ -257,10 +259,10 @@ with tab2:
     sample_data['Lat'] = sample_data.iloc[:, 9]  # lat column
     sample_data['Lon'] = sample_data.iloc[:, 10]  # lon column
 
-    # Create Folium map centered on Miami
+    # Create Folium map centered on the Miami-Dade + Broward metro area
     m = folium.Map(
-        location=[25.77, -80.14],
-        zoom_start=11,
+        location=[25.85, -80.28],
+        zoom_start=10,
         tiles='OpenStreetMap'
     )
 
@@ -285,17 +287,30 @@ with tab2:
             weight=2
         ).add_to(m)
 
-    st.markdown("### Miami Properties Map")
-    st_folium(m, width=700, height=500)
+    st.markdown("### Miami-Dade & Broward Properties Map")
+    map_data = st_folium(m, width=700, height=500, key="miami_map")
 
-    st.markdown("### Market Insights")
+    # Filter stats to only the properties currently visible in the map viewport
+    view_data = sample_data
+    bounds = map_data.get("bounds") if map_data else None
+    if bounds and bounds.get("_southWest") and bounds.get("_northEast"):
+        south, west = bounds["_southWest"]["lat"], bounds["_southWest"]["lng"]
+        north, east = bounds["_northEast"]["lat"], bounds["_northEast"]["lng"]
+        in_view = sample_data[
+            sample_data["Lat"].between(south, north) &
+            sample_data["Lon"].between(west, east)
+        ]
+        if len(in_view) > 0:
+            view_data = in_view
+
+    st.markdown(f"### Market Insights ({len(view_data)} properties in view)")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Median Price", f"${sample_data['Predicted_Price'].median():,.0f}")
+        st.metric("Median Price", f"${view_data['Predicted_Price'].median():,.0f}")
     with col2:
-        st.metric("Mean Price", f"${sample_data['Predicted_Price'].mean():,.0f}")
+        st.metric("Mean Price", f"${view_data['Predicted_Price'].mean():,.0f}")
     with col3:
-        st.metric("Price Range", f"${sample_data['Predicted_Price'].max() - sample_data['Predicted_Price'].min():,.0f}")
+        st.metric("Price Range", f"${view_data['Predicted_Price'].max() - view_data['Predicted_Price'].min():,.0f}")
 
 # ============================================================================
 # TAB 3: MODEL DIAGNOSTICS
@@ -383,7 +398,7 @@ with tab3:
     st.info("""
     **Algorithm**: LightGBM Regressor
 
-    **Training Data**: 854 Miami properties
+    **Training Data**: 792 Miami-Dade & Broward properties
 
     **Features**: 20 engineered
 
@@ -402,7 +417,7 @@ with tab3:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center">
-    <small>Miami Real Estate ML • R² = 0.9874 • 6.1% mean price error</small><br>
+    <small>Miami Real Estate ML • R² = 0.9921 • 4.6% mean price error</small><br>
     <small><a href="https://github.com/brianravelo28/miami-real-estate-ml">View on GitHub</a></small>
 </div>
 """, unsafe_allow_html=True)

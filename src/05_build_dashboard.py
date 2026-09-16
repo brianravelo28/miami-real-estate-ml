@@ -457,13 +457,18 @@ def update_map(price_range, prop_type):
 # ============================================================================
 
 if __name__ == '__main__':
+    import os
+
+    # Get port from environment (Render, Heroku, etc. set PORT env var)
+    port = int(os.environ.get('PORT', DASH_PORT))
+
     logger.info("="*60)
     logger.info("Starting Dash application...")
-    logger.info(f"Open browser to http://localhost:{DASH_PORT}")
+    logger.info(f"Open browser to http://localhost:{port}")
     logger.info("="*60)
-    
+
     app.run(
-        host=DASH_HOST,
-        port=DASH_PORT,
-        debug=DASH_DEBUG
+        host='0.0.0.0',  # Listen on all interfaces (required for deployment)
+        port=port,
+        debug=False  # NEVER use debug=True in production!
     )
