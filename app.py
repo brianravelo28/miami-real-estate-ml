@@ -12,6 +12,8 @@ import shap
 from PIL import Image
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+import folium
+from streamlit_folium import st_folium
 
 # Set page config
 st.set_page_config(
@@ -255,31 +257,36 @@ with tab2:
     sample_data['Lat'] = sample_data.iloc[:, 9]  # lat column
     sample_data['Lon'] = sample_data.iloc[:, 10]  # lon column
 
-    # Miami property map
-    fig = go.Figure(data=go.Scatter(
-        x=sample_data['Lon'],
-        y=sample_data['Lat'],
-        mode='markers',
-        marker=dict(
-            size=10,
-            color=sample_data['Predicted_Price'],
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(title="Price ($)"),
-            line=dict(width=1, color='white')
-        ),
-        text=[f"${p:,.0f}" for p in sample_data['Predicted_Price']],
-        hovertemplate="<b>Price: %{text}</b><br>Lat: %{y:.4f}<br>Lon: %{x:.4f}<extra></extra>"
-    ))
-
-    fig.update_layout(
-        title="Miami Properties by Predicted Price",
-        xaxis_title="Longitude",
-        yaxis_title="Latitude",
-        height=500,
-        hovermode='closest'
+    # Create Folium map centered on Miami
+    m = folium.Map(
+        location=[25.77, -80.14],
+        zoom_start=11,
+        tiles='OpenStreetMap'
     )
-    st.plotly_chart(fig, use_container_width=True)
+
+    # Add markers for each property
+    min_price = sample_data['Predicted_Price'].min()
+    max_price = sample_data['Predicted_Price'].max()
+
+    for idx, row in sample_data.iterrows():
+        price = row['Predicted_Price']
+        # Color based on price (red = low, green = high)
+        color_ratio = (price - min_price) / (max_price - min_price)
+        color = f'hsl({color_ratio * 120}, 100%, 50%)'  # Green for high, red for low
+
+        folium.CircleMarker(
+            location=[row['Lat'], row['Lon']],
+            radius=6,
+            popup=f"${price:,.0f}",
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.7,
+            weight=2
+        ).add_to(m)
+
+    st.markdown("### Miami Properties Map")
+    st_folium(m, width=700, height=500)
 
     st.markdown("### Market Insights")
     col1, col2, col3 = st.columns(3)
