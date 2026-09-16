@@ -249,22 +249,35 @@ with tab2:
     5. Little Havana - $420K median
     """)
 
-    # Price distribution chart
+    # Get sample data and predictions
     sample_data = X_test.sample(min(100, len(X_test)), random_state=42).copy()
     sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data))
+    sample_data['Lat'] = sample_data.iloc[:, 9]  # lat column
+    sample_data['Lon'] = sample_data.iloc[:, 10]  # lon column
 
-    fig = go.Figure(data=[
-        go.Histogram(
-            x=sample_data['Predicted_Price'],
-            nbinsx=20,
-            marker_color='steelblue'
-        )
-    ])
+    # Miami property map
+    fig = go.Figure(data=go.Scatter(
+        x=sample_data['Lon'],
+        y=sample_data['Lat'],
+        mode='markers',
+        marker=dict(
+            size=10,
+            color=sample_data['Predicted_Price'],
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title="Price ($)"),
+            line=dict(width=1, color='white')
+        ),
+        text=[f"${p:,.0f}" for p in sample_data['Predicted_Price']],
+        hovertemplate="<b>Price: %{text}</b><br>Lat: %{y:.4f}<br>Lon: %{x:.4f}<extra></extra>"
+    ))
+
     fig.update_layout(
-        title="Price Distribution (Test Set Sample)",
-        xaxis_title="Predicted Price ($)",
-        yaxis_title="Count",
-        height=400
+        title="Miami Properties by Predicted Price",
+        xaxis_title="Longitude",
+        yaxis_title="Latitude",
+        height=500,
+        hovermode='closest'
     )
     st.plotly_chart(fig, use_container_width=True)
 
