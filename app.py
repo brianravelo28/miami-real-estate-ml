@@ -276,8 +276,7 @@ with tab2:
             geo=dict(
                 scope='usa',
                 center=dict(lat=25.77, lon=-80.14),
-                projection_type='mercator',
-                zoom=10
+                projection_type='mercator'
             ),
             height=500,
             title="Miami Property Prices (Test Set Sample)"
