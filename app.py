@@ -14,8 +14,18 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import folium
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+FEATURE_NAMES = [
+    'beds', 'baths', 'sqft', 'sqft_log', 'property_age', 'price_per_sqft',
+    'list_to_sold_ratio', 'is_condo', 'is_townhouse',
+    'lat', 'lon', 'dist_downtown', 'dist_brickell', 'dist_beach',
+    'neighborhood_median_price', 'neighborhood_price_std',
+    'neighborhood_sales_count', 'flood_risk_percentile',
+    'sale_year', 'sale_month'
+]
 
 # Set page config
 st.set_page_config(
@@ -46,8 +56,22 @@ def load_artifacts():
 # STREAMLIT APP
 # ============================================================================
 
+st.markdown("""
+<style>
+html, body, p, span, li, label, input, textarea, select, button, div[class*="css"] {
+    font-size: 17px !important;
+}
+small, [data-testid="stCaptionContainer"], [data-testid="stMetricLabel"], [data-testid="stMetricDelta"] {
+    font-size: 15px !important;
+}
+section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+    background-color: rgba(28, 131, 225, 0.1) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.markdown("# 🏠 Miami Real Estate Price Predictor")
-st.markdown("AI-powered price estimation with explainable predictions (SHAP)")
+st.markdown("AI-powered price estimation with applicable predictions (SHAP)")
 
 # Load artifacts
 try:
@@ -84,11 +108,18 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📈 Dataset Info")
     st.info("""
-    - **Records**: 990 Miami-Dade & Broward properties
-    - **Features**: 20 engineered
-    - **Date**: 2026
-    - **Price Range**: $50K–$10M
+    **Records:**
+
+    990 Miami-Dade & Broward properties
+
+    **Date**: 2026
+
+    **Price Range:**
+
+    $50K–$10M
     """)
+    st.markdown("### 🧩 Features")
+    st.selectbox("Features", FEATURE_NAMES, label_visibility="collapsed")
 
 # ============================================================================
 # TAB 1: SEARCH & PREDICT
@@ -115,11 +146,121 @@ with tab1:
 
     # Location
     st.markdown("### Location")
-    col1, col2 = st.columns(2)
-    with col1:
-        lat = st.slider("Latitude", 25.70, 25.85, 25.77)
-    with col2:
-        lon = st.slider("Longitude", -80.25, -80.05, -80.14)
+    st.markdown("Pan and zoom the map until the crosshair turns red")
+
+    PIN_ZOOM_THRESHOLD = 10
+    MAP_HEIGHT = 350
+    # Approximate Miami-Dade + Broward coverage area (matches the sanity bounding box
+    # used to filter training data in src/real_estate_config.py)
+    METRO_LAT_BOUNDS = (25.10, 26.50)
+    METRO_LON_BOUNDS = (-80.95, -79.90)
+
+    if "pin_lat" not in st.session_state:
+        st.session_state.pin_lat, st.session_state.pin_lon = 25.77, -80.14
+
+    pin_map = folium.Map(location=[25.85, -80.28], zoom_start=10, tiles='OpenStreetMap')
+    pin_data = st_folium(
+        pin_map, width=700, height=MAP_HEIGHT, key="predict_pin_map",
+        returned_objects=["zoom", "bounds"]
+    )
+
+    zoom = pin_data.get("zoom") if pin_data else None
+    bounds = pin_data.get("bounds") if pin_data else None
+    bounds_valid = bool(
+        bounds and bounds.get("_southWest") and bounds.get("_northEast")
+        and bounds["_southWest"].get("lat") is not None
+        and bounds["_southWest"].get("lng") is not None
+        and bounds["_northEast"].get("lat") is not None
+        and bounds["_northEast"].get("lng") is not None
+    )
+    zoomed_in_enough = bool(zoom is not None and zoom >= PIN_ZOOM_THRESHOLD)
+
+    center_lat = center_lon = None
+    if bounds_valid:
+        south, west = bounds["_southWest"]["lat"], bounds["_southWest"]["lng"]
+        north, east = bounds["_northEast"]["lat"], bounds["_northEast"]["lng"]
+        center_lat = (south + north) / 2
+        center_lon = (west + east) / 2
+
+    in_coverage = bool(
+        center_lat is not None and center_lon is not None
+        and METRO_LAT_BOUNDS[0] <= center_lat <= METRO_LAT_BOUNDS[1]
+        and METRO_LON_BOUNDS[0] <= center_lon <= METRO_LON_BOUNDS[1]
+    )
+    active = zoomed_in_enough and bounds_valid and in_coverage
+
+    if active:
+        st.session_state.pin_lat, st.session_state.pin_lon = center_lat, center_lon
+
+    lat, lon = st.session_state.pin_lat, st.session_state.pin_lon
+    crosshair_color = "#d62728" if active else "#a3a3a3"
+
+    st.markdown(f"""
+    <style>
+    #pin-crosshair {{
+        position: absolute;
+        width: 24px;
+        height: 24px;
+        border: 3px solid {crosshair_color};
+        border-radius: 50%;
+        box-shadow: 0 0 0 2px white, 0 1px 4px rgba(0,0,0,0.5);
+        transform: translate(-50%, -50%);
+        z-index: 999;
+        pointer-events: none;
+        left: -100px;
+        top: -100px;
+    }}
+    #pin-crosshair::after {{
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 5px;
+        height: 5px;
+        background: {crosshair_color};
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+    }}
+    </style>
+    <div id="pin-crosshair"></div>
+    """, unsafe_allow_html=True)
+
+    # Positions the crosshair over the actual rendered map iframe rect, regardless of
+    # viewport width -- reaches into the parent page since components.html is sandboxed.
+    components.html("""
+    <script>
+    (function() {
+        function positionCrosshair() {
+            const doc = window.parent.document;
+            const crosshair = doc.getElementById('pin-crosshair');
+            if (!crosshair) return;
+            // Streamlit wraps this element in its own position:relative container --
+            // that container, not the document root, is what left/top actually resolve against.
+            const ownContainer = crosshair.closest('[data-testid="stElementContainer"]');
+            if (!ownContainer) return;
+            const prev = ownContainer.previousElementSibling;
+            const iframe = prev ? prev.querySelector('iframe') : null;
+            if (!iframe) return;
+            const iRect = iframe.getBoundingClientRect();
+            if (iRect.width === 0) return;
+            const cRect = ownContainer.getBoundingClientRect();
+            crosshair.style.left = (iRect.left + iRect.width / 2 - cRect.left) + 'px';
+            crosshair.style.top = (iRect.top + iRect.height / 2 - cRect.top) + 'px';
+        }
+        positionCrosshair();
+        window.parent.addEventListener('resize', positionCrosshair);
+        const intervalId = setInterval(positionCrosshair, 300);
+        setTimeout(() => clearInterval(intervalId), 30000);
+    })();
+    </script>
+    """, height=0)
+
+    if active:
+        st.markdown(f"**Pin location**: {lat:.4f}, {lon:.4f}")
+    elif zoomed_in_enough and bounds_valid and not in_coverage:
+        st.markdown("**Pin location**: outside the Miami-Dade/Broward coverage area")
+    else:
+        st.markdown(f"**Pin location**: zoom in closer to register a pin (current zoom: {zoom})")
 
     # Compute distances (simplified)
     from geopy.distance import geodesic
@@ -190,19 +331,9 @@ with tab1:
         st.markdown("### 📊 What Drives This Price?")
         st.markdown("Red features increase price • Blue features decrease price")
 
-        # Create simple SHAP explanation
-        feature_names = [
-            'beds', 'baths', 'sqft', 'sqft_log', 'property_age', 'price_per_sqft',
-            'list_to_sold_ratio', 'is_condo', 'is_townhouse',
-            'lat', 'lon', 'dist_downtown', 'dist_brickell', 'dist_beach',
-            'neighborhood_median_price', 'neighborhood_price_std',
-            'neighborhood_sales_count', 'flood_risk_percentile',
-            'sale_year', 'sale_month'
-        ]
-
         # Create bar chart of top SHAP values
         shap_importance = pd.DataFrame({
-            'Feature': feature_names,
+            'Feature': FEATURE_NAMES,
             'Impact': shap_val
         }).sort_values('Impact', key=abs, ascending=True).tail(10)
 
@@ -223,9 +354,11 @@ with tab1:
             xaxis_title="SHAP Impact (← decreases | increases →)",
             yaxis_title="Feature",
             height=400,
-            showlegend=False
+            showlegend=False,
+            font=dict(size=15)
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.caption("💡 Drag to zoom • Double-click to reset")
 
         st.markdown("**Key Insights:**")
         st.write(f"""
@@ -353,9 +486,11 @@ with tab3:
         title="Residuals vs Predicted Price",
         xaxis_title="Predicted Price (log scale)",
         yaxis_title="Residual (log scale)",
-        height=400
+        height=400,
+        font=dict(size=15)
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption("💡 Drag to zoom • Double-click to reset")
 
     st.markdown("---")
 
@@ -363,14 +498,7 @@ with tab3:
     st.markdown("### Global Feature Importance (SHAP)")
 
     shap_summary = pd.DataFrame({
-        'Feature': [
-            'beds', 'baths', 'sqft', 'sqft_log', 'property_age', 'price_per_sqft',
-            'list_to_sold_ratio', 'is_condo', 'is_townhouse',
-            'lat', 'lon', 'dist_downtown', 'dist_brickell', 'dist_beach',
-            'neighborhood_median_price', 'neighborhood_price_std',
-            'neighborhood_sales_count', 'flood_risk_percentile',
-            'sale_year', 'sale_month'
-        ],
+        'Feature': FEATURE_NAMES,
         'Importance': np.abs(shap_values).mean(axis=0)
     }).sort_values('Importance', ascending=True).tail(10)
 
@@ -379,17 +507,23 @@ with tab3:
             x=shap_summary['Importance'],
             y=shap_summary['Feature'],
             orientation='h',
-            marker_color='steelblue'
+            marker_color='steelblue',
+            text=[f'{v:.2f}' for v in shap_summary['Importance']],
+            textposition='auto',
+            hovertemplate='%{y}: %{x:.2f}<extra></extra>'
         )
     ])
     fig.update_layout(
         title="Top 10 Most Important Features",
         xaxis_title="Mean Absolute SHAP Value",
         yaxis_title="Feature",
+        xaxis=dict(tickformat='.2f'),
         height=400,
-        showlegend=False
+        showlegend=False,
+        font=dict(size=15)
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption("💡 Drag to zoom • Double-click to reset")
 
     st.markdown("---")
 
