@@ -4,7 +4,4 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --threads 2 --timeout 0 --bind 0.0.0.0:10000 "src.05_build_dashboard:app.server"
-    envVars:
-      - key: PORT
-        value: 10000
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0

@@ -18,15 +18,6 @@ import streamlit.components.v1 as components
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-FEATURE_NAMES = [
-    'beds', 'baths', 'sqft', 'sqft_log', 'property_age', 'price_per_sqft',
-    'list_to_sold_ratio', 'is_condo', 'is_townhouse',
-    'lat', 'lon', 'dist_downtown', 'dist_brickell', 'dist_beach',
-    'neighborhood_median_price', 'neighborhood_price_std',
-    'neighborhood_sales_count', 'flood_risk_percentile',
-    'sale_year', 'sale_month'
-]
-
 # Set page config
 st.set_page_config(
     page_title="Miami Real Estate Predictor",
@@ -45,12 +36,13 @@ def load_artifacts():
     model = pickle.load(open(os.path.join(APP_DIR, 'models', 'lightgbm_miami_v1.pkl'), 'rb'))
     X_test = pickle.load(open(os.path.join(APP_DIR, 'data', 'X_test.pkl'), 'rb'))
     y_test = pickle.load(open(os.path.join(APP_DIR, 'data', 'y_test.pkl'), 'rb'))
+    lookups = pickle.load(open(os.path.join(APP_DIR, 'data', 'feature_artifacts.pkl'), 'rb'))
 
     # Compute SHAP values once (cached)
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X_test)
 
-    return model, X_test, y_test, explainer, shap_values
+    return model, X_test, y_test, explainer, shap_values, lookups
 
 # ============================================================================
 # STREAMLIT APP
@@ -75,11 +67,15 @@ st.markdown("AI-powered price estimation with applicable predictions (SHAP)")
 
 # Load artifacts
 try:
-    model, X_test, y_test, explainer, shap_values = load_artifacts()
+    model, X_test, y_test, explainer, shap_values, lookups = load_artifacts()
     st.success("✓ Model and data loaded")
 except Exception as e:
     st.error(f"Error loading model: {e}")
     st.stop()
+
+FEATURE_NAMES = list(X_test.columns)
+ZIP_TABLE = lookups['zip_table']
+FLOOD_PROXY_SORTED = lookups['flood_proxy_sorted']
 
 # ============================================================================
 # SIDEBAR - MODEL INFO
@@ -274,35 +270,40 @@ with tab1:
 
     # Prediction button
     if st.button("🔮 Predict Price", use_container_width=True):
-        # Create feature array matching training data
-        sqft_log = np.log1p(sqft)
-        price_per_sqft = 350  # Average, will be updated by model
-        list_to_sold_ratio = 1.0
-        property_age_ordinal = min(3, property_age // 10)  # Simplified binning
-        near_coast = 1 if lat > 25.8 else 0
+        # Neighborhood features come from the nearest ZIP in the training data
+        # (same train-only stats the model was trained and tested with)
+        lon_scale = np.cos(np.radians(lat))
+        zip_dist = np.hypot(ZIP_TABLE['lat'] - lat, (ZIP_TABLE['lon'] - lon) * lon_scale)
+        nearest_zip = zip_dist.idxmin()
+        zip_row = ZIP_TABLE.loc[nearest_zip]
 
-        # Neighborhood features (using defaults/means)
-        neighborhood_median_price = 600000
-        neighborhood_price_std = 500000
-        neighborhood_sales_count = 100
-        flood_risk_percentile = (25.8 - lat) / 0.15  # Normalize
+        # Flood proxy percentile, ranked the same way as in training (average rank for ties)
+        proxy = max(25.8 - lat, 0.0)
+        n_ref = len(FLOOD_PROXY_SORTED)
+        below = np.searchsorted(FLOOD_PROXY_SORTED, proxy, side='left')
+        at_or_below = np.searchsorted(FLOOD_PROXY_SORTED, proxy, side='right')
+        flood_risk_percentile = ((below + 1 + at_or_below) / 2) / n_ref
 
-        sale_year = 2026
-        sale_month = 6
-
-        # Create feature row (must match training features order)
-        features = np.array([[
-            beds, baths, sqft, sqft_log, property_age, price_per_sqft,
-            list_to_sold_ratio, is_condo_val, is_townhouse_val,
-            lat, lon, dist_downtown, dist_brickell, dist_beach,
-            neighborhood_median_price, neighborhood_price_std,
-            neighborhood_sales_count, flood_risk_percentile,
-            sale_year, sale_month
-        ]])
+        row = {
+            'beds': beds, 'baths': baths, 'sqft': sqft, 'sqft_log': np.log1p(sqft),
+            'property_age': property_age, 'is_condo': is_condo_val, 'is_townhouse': is_townhouse_val,
+            'lat': lat, 'lon': lon,
+            'dist_downtown': dist_downtown, 'dist_brickell': dist_brickell, 'dist_beach': dist_beach,
+            'neighborhood_median_price': zip_row['median'],
+            'neighborhood_price_std': zip_row['std'],
+            'neighborhood_sales_count': zip_row['count'],
+            'flood_risk_percentile': flood_risk_percentile,
+        }
+        features = pd.DataFrame([row])[FEATURE_NAMES]
 
         # Predict
         y_pred_log = model.predict(features)[0]
         price_predicted = np.expm1(y_pred_log)
+
+        # Typical range: 10th-90th percentile of the model's test-set errors (log scale)
+        err_lo, err_hi = np.quantile(y_test - y_pred, [0.10, 0.90])
+        price_low = np.expm1(y_pred_log + err_lo)
+        price_high = np.expm1(y_pred_log + err_hi)
 
         # Get SHAP values for this prediction
         shap_val = explainer.shap_values(features)[0]
@@ -313,18 +314,13 @@ with tab1:
         col1, col2 = st.columns([1, 1])
 
         with col1:
-            st.metric(
-                "💰 Predicted Price",
-                f"${price_predicted:,.0f}",
-                delta=f"±${price_predicted * 0.06:,.0f}",
-                delta_color="off"
-            )
+            st.metric("💰 Predicted Price", f"${price_predicted:,.0f}")
 
         with col2:
             st.info(f"""
-            **Price Range**: ${price_predicted * 0.94:,.0f} — ${price_predicted * 1.06:,.0f}
+            **Typical range**: ${price_low:,.0f} — ${price_high:,.0f}
 
-            **Confidence**: High (based on {len(X_test)} test samples)
+            80% of the model's errors on {len(X_test)} held-out sales fall inside a range this wide, so treat this as a rough estimate.
             """)
 
         # SHAP Force Plot
@@ -362,10 +358,10 @@ with tab1:
 
         st.markdown("**Key Insights:**")
         st.write(f"""
-        - **Price per sqft** (${price_per_sqft:.0f}) is the strongest predictor
-        - **Distance to downtown** ({dist_downtown:.1f} miles) significantly affects price
-        - **Property age** ({property_age} years) influences market value
-        - **Location** (lat/lon) captures neighborhood premium
+        - **Size** ({sqft:,} sq ft) is the strongest overall driver in the model
+        - **Neighborhood**: nearest ZIP in the data is {nearest_zip} (median sale ${zip_row['median']:,.0f}, {int(zip_row['count'])} training sales)
+        - **Distance to downtown Miami** is {dist_downtown:.1f} miles
+        - **Property age** is {property_age} years
         """)
 
 # ============================================================================
@@ -375,22 +371,22 @@ with tab1:
 with tab2:
     st.markdown("## Miami Real Estate Market")
 
-    st.info("""
-    📍 Miami Real Estate Market Overview
-
-    **Top Neighborhoods by Median Price:**
-    1. Brickell - $850K median
-    2. Miami Beach - $750K median
-    3. Wynwood - $650K median
-    4. Allapattah - $480K median
-    5. Little Havana - $420K median
-    """)
+    top_zips = ZIP_TABLE[ZIP_TABLE['count'] >= 5].sort_values('median', ascending=False).head(5)
+    top_lines = "\n".join(
+        f"{i}. ZIP {z} - ${row['median'] / 1000:,.0f}K median ({int(row['count'])} sales)"
+        for i, (z, row) in enumerate(top_zips.iterrows(), 1)
+    )
+    st.info(
+        "📍 Market Overview\n\n"
+        "**Top ZIP codes by median sale price** (ZIPs with at least 5 training sales):\n\n"
+        + top_lines
+    )
 
     # Get sample data and predictions
     sample_data = X_test.sample(min(100, len(X_test)), random_state=42).copy()
     sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data))
-    sample_data['Lat'] = sample_data.iloc[:, 9]  # lat column
-    sample_data['Lon'] = sample_data.iloc[:, 10]  # lon column
+    sample_data['Lat'] = sample_data['lat']
+    sample_data['Lon'] = sample_data['lon']
 
     # Create Folium map centered on the Miami-Dade + Broward metro area
     m = folium.Map(
@@ -454,7 +450,7 @@ with tab3:
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("R² Score", f"{r2:.4f}", "Excellent")
+        st.metric("R² Score", f"{r2:.4f}")
     with col2:
         st.metric("Mean Absolute Error", f"{mae:.4f}", f"{pct_error:.1f}% price error")
     with col3:
@@ -529,12 +525,12 @@ with tab3:
 
     # Model info
     st.markdown("### Model Details")
-    st.info("""
+    st.info(f"""
     **Algorithm**: LightGBM Regressor
 
-    **Training Data**: 792 Miami-Dade & Broward properties
+    **Evaluation**: {len(X_test)} held-out Miami-Dade & Broward sales (80/20 split)
 
-    **Features**: 20 engineered
+    **Features**: {len(FEATURE_NAMES)} (none derived from the sale price; neighborhood stats use training sales only)
 
     **Target**: Log-transformed sale price
 
@@ -549,9 +545,9 @@ with tab3:
 # ============================================================================
 
 st.markdown("---")
-st.markdown("""
+st.markdown(f"""
 <div style="text-align: center">
-    <small>Miami Real Estate ML • R² = 0.9921 • 4.6% mean price error</small><br>
+    <small>Miami Real Estate ML • R² = {r2:.2f} • {pct_error:.0f}% mean price error</small><br>
     <small><a href="https://github.com/brianravelo28/miami-real-estate-ml">View on GitHub</a></small>
 </div>
 """, unsafe_allow_html=True)

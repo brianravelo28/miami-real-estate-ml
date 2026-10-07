@@ -1,30 +1,21 @@
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy project files
 COPY requirements.txt .
-COPY src/ src/
-COPY data/X_test.pkl data/
-COPY data/y_test.pkl data/
-COPY models/lightgbm_miami_v1.pkl models/
-COPY reports/ reports/
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port (7860 for HF Spaces, can be overridden)
-EXPOSE 7860
+# The dashboard only needs the app, trained model, and test split
+COPY app.py .
+COPY .streamlit/ .streamlit/
+COPY data/X_test.pkl data/
+COPY data/y_test.pkl data/
+COPY data/feature_artifacts.pkl data/
+COPY models/lightgbm_miami_v1.pkl models/
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:7860/ || exit 1
+EXPOSE 8501
 
-# Run dashboard
-CMD ["python", "src/05_build_dashboard.py"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
+
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

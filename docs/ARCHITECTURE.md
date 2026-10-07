@@ -1,465 +1,154 @@
 # System Architecture
 
-## 🏗️ Overview
-
-This document describes the end-to-end architecture of the Miami Real Estate ML pipeline, from data ingestion to interactive predictions.
+End-to-end architecture of the Miami Real Estate ML pipeline, from raw data to the interactive dashboard.
 
 ---
 
-## Data Flow Diagram
+## Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     Kaggle Dataset (10,893 records)                      │
-│                  florida_real_estate_sold_dataset_2026                   │
-└────────────────────────────┬────────────────────────────────────────────┘
-                             │
-                    ┌────────▼────────┐
-                    │  STEP 1: LOAD   │
-                    │  & VALIDATE     │
-                    └────────┬────────┘
-                             │
-           ┌─────────────────┴──────────────────┐
-           │ - Filter to Miami metro (ZIP 331,334)
-           │ - Remove price/sqft outliers
-           │ - Generate synthetic lat/lon
-           │ - Fill missing values
-           │
-           └─────────────────┬──────────────────┘
-                             │
-                    ┌────────▼──────────┐
-                    │  Cleaned Data     │
-                    │ (1,068 records)   │
-                    │ features_eng.pkl  │
-                    └────────┬──────────┘
-                             │
-                    ┌────────▼──────────────┐
-                    │  STEP 2: FEATURE     │
-                    │  ENGINEERING         │
-                    └────────┬──────────────┘
-                             │
-    ┌────────────────────────┼────────────────────────┐
-    │                        │                        │
-    ▼                        ▼                        ▼
-Property Features    Geospatial Features    Neighborhood Agg
-- beds, baths        - lat, lon             - median_price
-- sqft_log           - dist_downtown        - price_std
-- property_age       - dist_brickell        - sales_count
-- price_per_sqft     - dist_beach           - price_tier
-- is_condo           - near_coast           
-- is_townhouse                              Temporal Features
-- property_age_ord.  Flood Risk             - sale_year
-- list_to_sold_ratio - flood_risk_pctl     - sale_month
-                                             
-    │                        │                        │
-    └────────────────────────┼────────────────────────┘
-                             │
-                    ┌────────▼──────────────┐
-                    │  20-Feature Matrix   │
-                    │  + train/test split  │
-                    │  (80/20, stratified) │
-                    └────────┬──────────────┘
-                             │
-                    ┌────────▼──────────────┐
-                    │  STEP 3: TRAIN       │
-                    │  LIGHTGBM MODEL      │
-                    └────────┬──────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-        ▼                    ▼                    ▼
-   Evaluation          Model Artifacts      Visualizations
-   - R² = 0.987        - model.pkl          - residuals.png
-   - MAE = 6.1%        - feature_import     - actual_vs_pred.png
-   - RMSE = 0.1007                          
-                                             
-                    ┌────────▼──────────────┐
-                    │  STEP 4: SHAP        │
-                    │  EXPLAINABILITY      │
-                    └────────┬──────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-        ▼                    ▼                    ▼
-   SHAP Values      Force Plots          Feature Importance
-   (214, 20)        - 5 samples          - summary_plot.png
-   Expected: 13.3   - individual explns  - dependence_plots.png
-                                          
-                    ┌────────▼──────────────┐
-                    │  STEP 5: DASHBOARD   │
-                    │  Dash Web App        │
-                    └────────┬──────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-        ▼                    ▼                    ▼
-   Tab 1:            Tab 2:              Tab 3:
-   Search & Predict  Neighborhood Map   Model Diagnostics
-   - Input property  - Folium heatmap   - R² score
-   - Get prediction  - ZIP-level stats  - Residual plot
-   - SHAP force plot - Price dist.      - SHAP summary
-                     - Market trends    - Top 10 features
-                                         
-                             │
-                    ┌────────▼──────────────┐
-                    │  Interactive Web UI   │
-                    │  localhost:7860       │
-                    └───────────────────────┘
+Kaggle CSV: Florida Real Estate Sold 2026 (10,893 statewide records)
+        │
+  STEP 1: LOAD & VALIDATE  (src/01_load_data.py)
+   - Clean ZIPs to 5-digit strings
+   - Geocode every ZIP with pgeocode → lat, lon, county
+   - Keep Miami-Dade + Broward only (+ sanity bounding box)
+   - Remove price/sqft outliers, drop rows missing critical fields
+   - Add small jitter to coordinates
+        │
+  data/features_engineered.pkl  (990 records)
+        │
+  STEP 2: FEATURE ENGINEERING  (src/02_engineer_features.py)
+   - Property, geospatial, and flood-proxy features (none use the sale price)
+   - 80/20 split → 792 train / 198 test (BEFORE any price-based statistic)
+   - ZIP price stats computed from training rows only
+   - 16-feature matrix, log1p(price) target
+        │
+  data/X_train.pkl, y_train.pkl, X_test.pkl, y_test.pkl, feature_artifacts.pkl
+        │
+  STEP 3: TRAIN LIGHTGBM  (src/03_train_model.py)
+   - 200 boosting rounds
+   - Metrics, residual and actual-vs-predicted plots
+        │
+  models/lightgbm_miami_v1.pkl, reports/evaluation_report.txt
+        │
+  STEP 4: SHAP ANALYSIS  (src/04_shap_analysis.py)
+   - Summary, importance, force, and dependence plots
+        │
+  STREAMLIT DASHBOARD  (app.py)
+   - Tab 1: Search & Predict
+   - Tab 2: Neighborhood Map
+   - Tab 3: Diagnostics
 ```
+
+`src/05_build_dashboard.py` is the original Dash version of the dashboard and is superseded by `app.py`.
 
 ---
 
-## Component Breakdown
+## Components
 
-### 1. **Data Ingestion (Step 1)**
+### 1. Data ingestion (`src/01_load_data.py`)
 
-**File**: `src/01_load_data.py`
+**Input**: `data/florida_sold_2026.csv` (statewide), config from `src/real_estate_config.py`.
 
-**Inputs**:
-- Raw CSV from Kaggle (10,893 Florida property sales)
-- Config parameters from `real_estate_config.py`
+1. Load the CSV.
+2. Normalize `zip` to a 5-digit string (the raw column is float, e.g. `33446.0`).
+3. Geocode each unique ZIP with `pgeocode` to get `latitude`, `longitude`, and `county_name`.
+4. Keep rows whose county is in `TARGET_COUNTIES` (`Miami-Dade`, `Broward`). Filtering on county rather than ZIP prefix matters: prefixes like `334` also cover Palm Beach and Monroe counties.
+5. Drop rows whose coordinates fall outside the sanity box `METRO_LAT_BOUNDS` / `METRO_LON_BOUNDS` (catches bad ZIP geocodes, e.g. ZIP 33973 is labeled Broward but sits in Lee County).
+6. Remove outliers: price $50K–$10M, sqft 400–10,000.
+7. Drop rows missing beds, baths, sqft, year built, price, or coordinates.
+8. Add ±0.005° (≈0.35 mi) Gaussian jitter to coordinates so same-ZIP sales don't stack.
+9. Add `flood_risk = 'X'` (no FEMA data available).
 
-**Processing**:
-1. Load CSV → pandas DataFrame
-2. Filter by ZIP code prefixes (Miami metro: 331, 334)
-3. Validate required columns: zip, beds, baths, sqft, yr_built, lastSoldPrice
-4. Remove outliers:
-   - Price: $50K–$10M
-   - Sqft: 400–10,000
-5. Handle missing values (drop critical columns)
-6. Generate synthetic lat/lon from ZIP codes (since dataset lacks coordinates)
-7. Add default flood_risk = 'X' (no FEMA data available)
+**Output**: `data/features_engineered.pkl`, 990 records (503 Miami-Dade, 487 Broward) across 128 ZIP codes.
 
-**Outputs**:
-- `data/features_engineered.pkl` — Cleaned DataFrame (1,068 records, 17 columns)
+### 2. Feature engineering (`src/02_engineer_features.py`)
 
-**Why pickle?**
-- Preserves data types (no re-casting on reload)
-- Fast I/O for large datasets
-- Seamless pandas integration
+Builds the 16 modeling features listed in `FEATURE_COLS` (see [DATA_SCHEMA.md](DATA_SCHEMA.md)):
 
----
+- **Property**: beds, baths, sqft, sqft_log, property_age, is_condo, is_townhouse
+- **Geospatial**: lat, lon, distances to downtown Miami, Brickell, and Miami Beach (geodesic miles)
+- **Neighborhood** (grouped by ZIP): median price, price std, sales count, from **training sales only**
+- **Risk**: flood_risk_percentile (latitude-based proxy)
 
-### 2. **Feature Engineering (Step 2)**
+Leakage safeguards:
+- No feature is computed from the sale price of the row it describes (an earlier version used `price_per_sqft` and `list_to_sold_ratio`, which leaked the target).
+- The split (80/20, `random_state=42`, stratified by price quartile) happens **before** any price-based statistic is computed.
+- Training rows get **leave-one-out** ZIP stats (their own sale is excluded); test rows and dashboard predictions use stats from all training sales in the ZIP. ZIPs with no other training sales fall back to the global training median/std with a count of 0.
+- Constant columns (`sale_year`, `sale_month`) are no longer used.
 
-**File**: `src/02_engineer_features.py`
+The target is `log1p(lastSoldPrice)`.
 
-**Inputs**:
-- Cleaned data from Step 1
-- Config: reference points, bins, feature list
+`data/feature_artifacts.pkl` stores what the dashboard needs at prediction time: the per-ZIP training stats and ZIP centroids, the global fallback stats, and the sorted latitude-proxy values used to compute `flood_risk_percentile`.
 
-**Feature Categories**:
+### 3. Model training (`src/03_train_model.py`)
 
-#### Property Features (6 features)
-- `sqft_log` = log(sqft) — non-linear size effect
-- `property_age` = 2026 - yr_built — newer = premium
-- `price_per_sqft` = lastSoldPrice / sqft — market density
-- `list_to_sold_ratio` = lastSoldPrice / listPrice — negotiation power
-- `is_condo` = 1 if type=='condo' else 0 — property classification
-- `is_townhouse` = 1 if type=='townhouse' else 0
-- `property_age_ordinal` = binned(property_age, bins=[0,5,20,40,200])
+LightGBM regression, hyperparameters from `LIGHTGBM_PARAMS` in the config (`num_leaves=31`, `learning_rate=0.05`, `feature_fraction=0.8`, `bagging_fraction=0.8`, `bagging_freq=5`), 200 rounds.
 
-#### Geospatial Features (5 features)
-- `lat`, `lon` — raw coordinates (synthetic, but spatially meaningful)
-- `dist_downtown` = haversine(lat, lon, (25.7617, -80.1918)) — miles to CBD
-- `dist_brickell` = haversine(..., (25.7582, -80.1911))
-- `dist_beach` = haversine(..., (25.7945, -80.1298)) — waterfront proxy
-- `near_coast` = 1 if lat > 25.8 else 0 — latitude as coast proximity
+Test-set results:
 
-#### Neighborhood Aggregations (3 features)
-Grouped by ZIP code:
-- `neighborhood_median_price` = median(lastSoldPrice) per ZIP
-- `neighborhood_price_std` = std(lastSoldPrice) per ZIP
-- `neighborhood_sales_count` = count() per ZIP
-- `neighborhood_price_tier` = ordinal(neighborhood_median_price) — used for stratification only
+| Metric | Value |
+|--------|-------|
+| RMSE (log scale) | 0.3352 |
+| MAE (log scale) | 0.2440 (≈ 27.6% price error) |
+| R² (test) | 0.8261 |
+| R² (train) | 0.9681 |
 
-#### Temporal Features (2 features)
-- `sale_year` = 2026 (default, no saleDate in data)
-- `sale_month` = 6 (mid-year default)
+The gap between train and test R² shows some overfitting on the small training set. The 10th–90th percentile of test errors corresponds to roughly ×0.70 to ×1.63 of the predicted price, which the dashboard shows as its "typical range".
 
-#### Risk Features (1 feature)
-- `flood_risk_percentile` = rank(25.8 - lat) / n — latitude-based proxy
-  (Lower latitude = closer to coast = higher flood risk)
+Top features by gain: `sqft` (2027), `sqft_log` (336), `neighborhood_median_price` (266), `baths` (225), `dist_beach` (196).
 
-**Feature Selection**:
-- Start with all 20 created features
-- Select subset from `FEATURE_COLS` (config)
-- Drop features with >50% missing (none in this case)
+**Outputs**: `models/lightgbm_miami_v1.pkl`, `reports/evaluation_report.txt`, `reports/residuals.png`, `reports/actual_vs_predicted.png`.
 
-**Train/Test Split**:
-- 80/20 split (854 train, 214 test)
-- Stratified by `neighborhood_price_tier` (ensures all price tiers in both sets)
-- `random_state=42` for reproducibility
+### 4. Explainability (`src/04_shap_analysis.py`)
 
-**Outputs**:
-- `data/X_train.pkl` — (854, 20) feature matrix
-- `data/y_train.pkl` — (854,) log-transformed target
-- `data/X_test.pkl` — (214, 20) feature matrix
-- `data/y_test.pkl` — (214,) log-transformed target
+`shap.TreeExplainer` on the test set (198 × 16 SHAP matrix, base value ≈ 13.2 in log space, ≈ $540K). Generates summary, importance, force, and dependence plots; see `reports/SHAP_INTERPRETATION_GUIDE.md`.
 
----
+### 5. Dashboard (`app.py`)
 
-### 3. **Model Training (Step 3)**
-
-**File**: `src/03_train_model.py`
-
-**Algorithm**: LightGBM (Gradient Boosting Decision Trees)
-
-**Why LightGBM?**
-- Fast training (handles 1,068 records in seconds)
-- Interpretable feature importance via gain/split/cover
-- Native SHAP support
-- Handles numeric features without preprocessing
-- Robust to outliers (tree splits are threshold-based)
-
-**Target Transformation**:
-- `y = log1p(lastSoldPrice)` — reduces right skewness
-- Interpretation: RMSE in log scale → ≈ percentage error in original price
-
-**Hyperparameters** (from config):
-```python
-{
-    'objective': 'regression',      # Predict continuous values
-    'metric': 'rmse',               # Optimize root mean squared error
-    'num_leaves': 31,               # Tree depth (2^5 = 32 max leaves)
-    'learning_rate': 0.05,          # Shrinkage (prevents overfitting)
-    'feature_fraction': 0.8,        # Random subsampling of features
-    'bagging_fraction': 0.8,        # Random subsampling of samples
-    'bagging_freq': 5,              # Bagging every 5 boosting rounds
-    'verbose': -1,                  # Suppress logs
-}
-num_boost_round=200                 # 200 decision trees
-```
-
-**Training Process**:
-1. Create LightGBM Dataset from (X_train, y_train)
-2. Train 200 rounds of boosting
-3. Log every 50 rounds (progress indicator)
-4. Evaluate on test set
-
-**Evaluation Metrics** (on test set):
-```
-y_pred = model.predict(X_test)
-
-RMSE = sqrt(mean((y_true - y_pred)^2))
-       = 0.1007 (log scale)
-       ≈ exp(0.1007) - 1 = 10.6% price error
-
-MAE = mean(|y_true - y_pred|)
-    = 0.0596 (log scale)
-    ≈ 6.1% average price error (more interpretable)
-
-R² = 1 - (SS_res / SS_tot)
-   = 0.9874 (excellent fit)
-```
-
-**Feature Importance** (via gain = reduction in loss per feature):
-1. `price_per_sqft` — 3,693 (most splits on this feature)
-2. `sqft` — 1,370
-3. `sqft_log` — 326 (multicollinearity with sqft, but improves splits)
-4. [... 17 more features]
-
-**Outputs**:
-- `models/lightgbm_miami_v1.pkl` — Trained model (binary serialized)
-- `reports/evaluation_report.txt` — Metrics summary
-- `reports/residuals.png` — Residual plot (errors vs predictions)
-- `reports/actual_vs_predicted.png` — Prediction accuracy plot
-
----
-
-### 4. **Model Explainability (Step 4)**
-
-**File**: `src/04_shap_analysis.py`
-
-**SHAP (SHapley Additive exPlanations)**:
-- Game-theoretic approach to model interpretability
-- Assigns each feature a value representing its contribution to each prediction
-- Satisfies 4 desirable properties (symmetry, dummy, additivity, efficiency)
-
-**Implementation**:
-```python
-import shap
-
-explainer = shap.TreeExplainer(model)  # Optimized for tree models
-shap_values = explainer.shap_values(X_test)  # (214, 20) array
-base_value = explainer.expected_value  # ≈ mean(y_train) = 13.295
-```
-
-**Outputs**:
-
-| Artifact | Purpose |
-|----------|---------|
-| `shap_summary.png` | Dot plot showing feature importance & direction |
-| `shap_feature_importance.png` | Bar chart of mean absolute SHAP values |
-| `shap_force_sample_1-5.png` | Individual predictions explained |
-| `shap_dependence_plots.png` | Scatter plots: feature value vs SHAP value |
-| `SHAP_INTERPRETATION_GUIDE.md` | User-friendly documentation |
-
-**Example Reading a Force Plot**:
-```
-Base value: $500K (model's average prediction)
-  ├─ price_per_sqft=120 [red] +$150K (above average market rate)
-  ├─ sqft=2,000 [red] +$120K (larger than median)
-  ├─ property_age=8 [blue] -$30K (slightly old)
-  └─ ... other features ...
-Final prediction: $740K
-```
-
----
-
-### 5. **Interactive Dashboard (Step 5)**
-
-**File**: `src/05_build_dashboard.py`
-
-**Framework**: Dash (Plotly) + Flask
-
-**Architecture**:
-```
-User's Browser
-     │
-     └─→ http://localhost:7860
-              │
-         ┌────▼─────┐
-         │ Dash App │ (Flask server)
-         └────┬─────┘
-              │
-         ┌────▼───────────────┐
-         │ Loaded Artifacts   │
-         ├─ model.pkl         │
-         ├─ X_test.pkl        │
-         ├─ SHAP values       │
-         ├─ Images (.png)     │
-         └────┬───────────────┘
-              │
-    ┌─────────┼─────────┐
-    │         │         │
-    ▼         ▼         ▼
-  Tab 1:   Tab 2:    Tab 3:
-  Predict  Heatmap   Diagnostics
-```
+Streamlit app. On startup it loads the model and test split and computes SHAP values once (`st.cache_resource`).
 
 **Tab 1: Search & Predict**
-- User inputs: beds, baths, sqft, location (ZIP or lat/lon)
-- Backend:
-  1. Create feature row (apply same transformations as training)
-  2. `y_pred_log = model.predict([feature_row])`
-  3. `price = exp(y_pred_log) - 1` (convert back from log scale)
-  4. `shap_val = explainer.shap_values([feature_row])[0]` (explain prediction)
-  5. Generate force plot + similar sales
-- Display: Predicted price, SHAP force plot, confidence interval
+- Inputs: beds, baths, sqft, property age, property type.
+- Location: a crosshair fixed at the center of a Folium map; panning the map sets the point. The crosshair is red when the map is at zoom ≥ 10 and centered within the Miami-Dade/Broward bounding box, gray otherwise.
+- Output: predicted price, a "typical range" (10th–90th percentile of the model's test errors), and a SHAP bar chart of the top 10 features for that prediction.
+- Neighborhood features are looked up from the nearest ZIP centroid in `feature_artifacts.pkl` (the same training-only stats the model saw); distances and the flood percentile are computed from the pin the same way as in training.
 
 **Tab 2: Neighborhood Map**
-- Folium map of Miami
-- Heatmap layer: ZIP code boundaries colored by median price
-- Markers: Sample sales with price on hover
-- Interactivity: Click to see ZIP stats
+- Folium map of 100 sampled test properties, colored by predicted price.
+- Median, mean, and range stats recompute for the properties inside the current map view.
 
-**Tab 3: Model Diagnostics**
-- KPI cards: R², RMSE, MAE
-- Residual plot: (y_pred vs y_true - y_pred)
-- SHAP summary plot
-- Feature importance bar chart
+**Tab 3: Diagnostics**
+- R², MAE, RMSE; residual plot; global SHAP feature importance (mean |SHAP|, top 10).
 
-**Callbacks** (Dash reactivity):
-```python
-@callback(
-    Output('prediction-output', 'children'),
-    Input('predict-button', 'n_clicks'),
-    State('beds-input', 'value'),
-    State('baths-input', 'value'),
-    # ... more states
-)
-def update_prediction(n_clicks, beds, baths, ...):
-    # Compute & return prediction
-```
+All Plotly charts carry a drag-to-zoom / double-click-to-reset hint.
 
 ---
 
-## Deployment Considerations
+## Deployment
 
-### Current State (Development)
-- Local execution (`python 05_build_dashboard.py`)
-- Single-threaded Dash server
-- In-memory model loading
-
-### Production Readiness
-To deploy to cloud (AWS, GCP, Heroku):
-
-1. **Containerize**:
-   ```dockerfile
-   FROM python:3.9
-   WORKDIR /app
-   COPY . .
-   RUN pip install -r requirements.txt
-   CMD ["python", "05_build_dashboard.py"]
-   ```
-
-2. **Use production ASGI server**:
-   ```bash
-   gunicorn --workers 4 --timeout 120 \
-            --bind 0.0.0.0:8000 \
-            'app:server'  # Dash's underlying Flask app
-   ```
-
-3. **Environment variables**:
-   ```bash
-   export MODEL_PATH=/data/models/lightgbm_miami_v1.pkl
-   export DASH_PORT=8000
-   export LOG_LEVEL=INFO
-   ```
-
-4. **Database** (if caching predictions):
-   - PostgreSQL for prediction history
-   - Redis for SHAP value caching (expensive to recompute)
+Deployed on Render's free tier (auto-deploys on push to `main`): https://miami-real-estate-ml.onrender.com/. The app needs only `app.py`, the model pickle, and `data/X_test.pkl` / `y_test.pkl`. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
-## Error Handling & Validation
+## Pipeline robustness
 
-### Pipeline Robustness
-
-| Step | Failure Mode | Mitigation |
+| Step | Failure mode | Mitigation |
 |------|--------------|-----------|
-| **Load** | Missing CSV | Instructions to download from Kaggle |
-| **Load** | Bad columns | Validate required columns upfront |
-| **Engineer** | NaN in features | Fillna with median/mode |
-| **Train** | Categorical types | Type-check before passing to LightGBM |
-| **SHAP** | Slow computation | Sample test set if >10K rows |
-| **Dashboard** | Image not found | Try/except + fallback placeholder |
-
-### Data Quality Checks
-```python
-# Outlier detection & removal
-price_ok = (df['lastSoldPrice'] >= MIN_PRICE) & 
-           (df['lastSoldPrice'] <= MAX_PRICE)
-
-sqft_ok = (df['sqft'] >= MIN_SQFT) & (df['sqft'] <= MAX_SQFT)
-
-# Missing values
-critical_cols = ['beds', 'baths', 'sqft', 'lastSoldPrice']
-df = df.dropna(subset=critical_cols)
-```
+| Load | Missing CSV | Clear error with Kaggle download instructions |
+| Load | Float-typed ZIPs / bad geocodes | ZIP normalization; county filter plus bounding-box sanity check |
+| Load | Missing required columns | Validated up front |
+| Engineer | NaN in features | Filled with median/default |
+| Dashboard | Relative-path breakage | Paths resolved from `app.py`'s own location |
+| Dashboard | Map returns null bounds | Validity check before using bounds |
 
 ---
 
-## Performance Metrics
+## Future enhancements
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| **Step 1** (Load + Validate) | 1-2 sec | CSV read + filtering |
-| **Step 2** (Feature Engineering) | 5-10 sec | Haversine distance, groupby aggregations |
-| **Step 3** (Train LightGBM) | 10-20 sec | 200 boosting rounds, 854 samples |
-| **Step 4** (SHAP Analysis) | 30-60 sec | TreeExplainer on 214 test samples |
-| **Step 5** (Dashboard Load) | 2-5 sec | Model + images in memory |
-
-**Total Pipeline Runtime**: ≈2–3 minutes (first run)
-
----
-
-## Future Enhancements
-
-1. **Incremental Learning**: Retrain model weekly on new sales
-2. **A/B Testing**: Serve multiple model versions to subset of users
-3. **Confidence Intervals**: Use quantile regression for prediction bounds
-4. **API Layer**: FastAPI backend for mobile app integration
-5. **Monitoring**: Log predictions, track prediction vs actual prices, detect model drift
+1. Cross-validation and a small hyperparameter search to narrow the train/test gap
+2. Proper prediction intervals via quantile regression (the current range is empirical)
+3. FEMA flood zones instead of the latitude proxy
+4. Real sale dates for seasonality and trend features
+5. Monitoring for prediction drift once real usage exists

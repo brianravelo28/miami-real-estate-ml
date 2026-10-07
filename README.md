@@ -13,8 +13,8 @@ A machine learning pipeline that predicts residential property prices in Miami-D
 This project demonstrates end-to-end applied ML: data acquisition → feature engineering → model training → explainability → deployment. It combines:
 
 - **990 Miami-Dade & Broward property sales** (2026 Kaggle dataset, filtered by county via ZIP-code geocoding)
-- **20 engineered features** (property, geospatial, neighborhood, temporal)
-- **LightGBM regressor** with R² = 0.992 and 4.6% mean price error
+- **16 engineered features** (property, geospatial, neighborhood, flood proxy), none derived from the sale price
+- **LightGBM regressor** with R² = 0.83 on held-out sales and ~28% average price error
 - **SHAP explanations** for every prediction
 - **Interactive Streamlit dashboard** for price estimation, a neighborhood map, and model diagnostics
 
@@ -24,15 +24,17 @@ This project demonstrates end-to-end applied ML: data acquisition → feature en
 
 | Metric | Value | Target | Status |
 |--------|-------|--------|--------|
-| **R² Score** | 0.9921 | ≥ 0.80 | ✅ |
-| **RMSE (log scale)** | 0.0674 | ≤ 0.20 | ✅ |
-| **MAE (log scale)** | 0.0447 | ≤ 0.18 | ✅ |
-| **Mean Price Error** | 4.6% | ≤ 20% | ✅ |
+| **R² Score** | 0.8261 | ≥ 0.80 | ✅ |
+| **RMSE (log scale)** | 0.3352 | ≤ 0.20 | ❌ |
+| **MAE (log scale)** | 0.2440 | ≤ 0.18 | ❌ |
+| **Mean Price Error** | 27.6% | — | — |
+
+Evaluated on 198 held-out sales. Training R² is 0.968, so the model overfits somewhat on this small (792-row) training set. An earlier version reported R² = 0.992, but that came from features computed from the sale price (target leakage), which have since been removed (see [Methodology](docs/METHODOLOGY.md)).
 
 **Top 3 Features** (by model gain):
-1. `price_per_sqft` — Market signal & location premium
-2. `sqft` — Property size
-3. `sqft_log` — Log-scaled size (non-linear effects)
+1. `sqft` — Property size
+2. `sqft_log` — Log-scaled size (non-linear effects)
+3. `neighborhood_median_price` — Median sale price of training sales in the ZIP
 
 ---
 
@@ -137,7 +139,7 @@ Florida Real Estate CSV (Kaggle)
     ↓ (Step 1: Load & Validate)
 Cleaned dataset: 990 Miami-Dade & Broward properties
     ↓ (Step 2: Feature Engineering)
-20 engineered features + train/test split (80/20)
+80/20 train/test split, then 16 features (ZIP stats from training sales only)
     ↓ (Step 3: Train Model)
 LightGBM model (200 boosting rounds)
     ├─→ (Step 4: SHAP Analysis) → Explainability plots
@@ -153,7 +155,7 @@ The Streamlit app (`streamlit run app.py`) provides three tabs:
 ### 🔍 **Tab 1: Search & Predict**
 - Input property details (beds, baths, sqft, property type)
 - Pick a location by panning a map under a fixed crosshair (active within Miami-Dade/Broward)
-- Get a price prediction with a confidence range
+- Get a price prediction with a "typical range" based on the model's held-out errors
 - View a SHAP bar chart of the features driving that prediction
 
 ### 🗺️ **Tab 2: Neighborhood Map**
@@ -200,19 +202,17 @@ To adjust parameters, edit this file once—all scripts automatically pick up ch
 ### Architecture
 - **Algorithm**: LightGBM (Gradient Boosting Decision Trees)
 - **Target**: Log-transformed sale price (for reduced skewness)
-- **Features**: 20 numeric features (no categorical encoding needed)
-- **Train/Test Split**: 80/20, stratified by neighborhood price tier
+- **Features**: 16 numeric features (no categorical encoding needed)
+- **Train/Test Split**: 80/20, stratified by price quartile, done before any price-based feature is computed
 
 ### Feature Categories
 
 | Category | Examples | Count |
 |----------|----------|-------|
-| **Property** | beds, baths, sqft, property_age, is_condo | 6 |
-| **Geospatial** | lat, lon, dist_downtown, dist_brickell, near_coast | 5 |
-| **Neighborhood** | neighborhood_median_price, neighborhood_price_std | 3 |
-| **Temporal** | sale_year, sale_month | 2 |
-| **Risk** | flood_risk_percentile | 1 |
-| **Interaction** | price_per_sqft, list_to_sold_ratio | 2 |
+| **Property** | beds, baths, sqft, sqft_log, property_age, is_condo, is_townhouse | 7 |
+| **Geospatial** | lat, lon, dist_downtown, dist_brickell, dist_beach | 5 |
+| **Neighborhood** | neighborhood_median_price, neighborhood_price_std, neighborhood_sales_count (training sales only) | 3 |
+| **Risk** | flood_risk_percentile (latitude proxy) | 1 |
 
 ### Hyperparameters
 ```python
@@ -237,13 +237,16 @@ All predictions include **SHAP (SHapley Additive exPlanations)** values:
 - **Force Plot**: For each prediction, displays individual feature contributions
 - **Dependence Plot**: Scatter plot of feature value vs SHAP value
 
-Example: "This property is predicted at $750K because price_per_sqft is high (+$200K relative to baseline), but older property_age lowers it (-$50K)."
+Example: "This property is predicted above the baseline mainly because it is large (`sqft`), partly offset by being a condo in a lower-priced ZIP."
 
 ---
 
 ## 🔬 Model Limitations & Next Steps
 
 ### Current Limitations
+- **Modest accuracy**: ~28% average price error (an 80% error band of roughly -30% to +63%), with a noticeable train/test gap; the dashboard shows this as a wide "typical range" instead of a point estimate alone
+- **Sparse neighborhood stats**: ZIP statistics come from ~6 training sales per ZIP on average (4 ZIPs have none), so they are noisy
+- The dashboard maps the pin to the nearest ZIP centroid in the data to look up those stats
 - Trained only on Miami-Dade & Broward 2026 data; may not generalize to other areas/years
 - Geospatial features use ZIP-code centroids (plus small jitter), not exact property addresses
 - No flood risk from FEMA shapefiles (using latitude proxy instead)

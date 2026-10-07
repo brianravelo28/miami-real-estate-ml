@@ -1,178 +1,89 @@
 # Data Acquisition Guide
 
-## 📥 Downloading the Dataset
+## Downloading the dataset
 
 The project uses the **Florida Real Estate Sold 2026** dataset from Kaggle.
 
-### Steps
+1. Go to https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026 (free Kaggle account required).
+2. Download the CSV (`florida_real_estate_sold_properties_ultimate.csv`, ≈14 MB).
+3. Place it at `data/florida_sold_2026.csv` (the scripts expect this name):
 
-1. **Visit Kaggle**:
-   - Go to: https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026
-
-2. **Download CSV**:
-   - Click "Download" button
-   - File: `florida_real_estate_sold_properties_ultimate.csv` (≈14 MB)
-   - Requires Kaggle account (free signup)
-
-3. **Place in Project**:
    ```bash
-   # Move downloaded file to data folder
-   mv ~/Downloads/florida_real_estate_sold_properties_ultimate.csv \
-      /path/to/miami-real-estate-ml/data/
-   
-   # Rename for consistency (script expects this name)
-   mv data/florida_real_estate_sold_properties_ultimate.csv \
-      data/florida_sold_2026.csv
-   ```
-
-4. **Verify**:
-   ```bash
-   ls -lh data/florida_sold_2026.csv
-   # Should show ~14 MB file
+   mv ~/Downloads/florida_real_estate_sold_properties_ultimate.csv data/florida_sold_2026.csv
    ```
 
 ### Alternative: Kaggle CLI
 
-If you have `kaggle` CLI installed:
-
 ```bash
-# Authenticate (first time only)
-kaggle auth login  # Creates ~/.kaggle/kaggle.json
-
-# Download dataset
 kaggle datasets download -d kanchana1990/florida-real-estate-sold-dataset-2026
-
-# Unzip
 unzip florida-real-estate-sold-dataset-2026.zip -d data/
-
-# Rename
 mv data/florida_real_estate_sold_properties_ultimate.csv data/florida_sold_2026.csv
 ```
 
+(Set up credentials first by saving your API token to `~/.kaggle/kaggle.json`.)
+
 ---
 
-## 📊 Dataset Overview
+## Dataset overview
 
 | Aspect | Details |
 |--------|---------|
 | **Name** | Florida Real Estate Sold 2026 |
 | **Source** | Kaggle |
-| **Size** | ≈14 MB |
 | **Records** | 10,893 (statewide Florida) |
-| **Records (Miami filtered)** | 1,068 (after filtering to ZIP 331, 334) |
+| **Records after filtering** | 990 (Miami-Dade + Broward, outliers and missing values removed) |
 | **Columns** | 14 |
 | **Format** | CSV |
 
----
-
-## 📋 Column Reference
-
-See [`../docs/DATA_SCHEMA.md`](../docs/DATA_SCHEMA.md) for detailed column definitions.
+Column definitions are in [`../docs/DATA_SCHEMA.md`](../docs/DATA_SCHEMA.md).
 
 ---
 
-## ⚠️ Data Limitations
+## Data limitations
 
-1. **Geographic**: Florida statewide data; filtered to Miami metro manually
-2. **Temporal**: 2026 snapshot; no historical trends
-3. **Coordinates**: No lat/lon provided; project generates synthetic values from ZIP codes
-4. **Flood zones**: No FEMA flood zone data; using latitude as proxy
-5. **Images/Descriptions**: Includes text descriptions but no structured features
-
----
-
-## 🔄 How the Pipeline Uses This Data
-
-1. **Step 1 (Load)**: 
-   - Reads CSV
-   - Filters to Miami metro (ZIP prefix 331, 334)
-   - Validates columns
-   - Outputs: `features_engineered.pkl` (1,068 records)
-
-2. **Steps 2–5**: 
-   - Use pickled data (faster I/O)
-   - Raw CSV not needed after Step 1
+1. **Geographic**: statewide data, filtered to Miami-Dade and Broward by the pipeline
+2. **Temporal**: 2026 snapshot with no sale dates
+3. **Coordinates**: none in the file; the pipeline geocodes each ZIP code to its centroid with `pgeocode` (needs internet access the first time it runs to download ZIP data)
+4. **Flood zones**: no FEMA data; a latitude proxy is used
+5. **Text descriptions**: included but unused
 
 ---
 
-## 💾 Storage & Cleanup
+## How the pipeline uses this data
 
-### Don't Commit Raw Data to Git
-
-The `.gitignore` file excludes:
-```
-data/*.csv          # Raw CSV files
-data/raw/           # Raw data folder
-```
-
-**Why?**
-- Files are large (14 MB)
-- Copyrighted data
-- Not needed for reproducibility (easily downloaded from Kaggle)
-
-### To Regenerate:
-```bash
-# If you delete the CSV, re-download from Kaggle (steps above)
-# The entire pipeline is reproducible from:
-# 1. This CSV
-# 2. The code in src/
-# 3. The config in real_estate_config.py
-```
+1. **Step 1 (`src/01_load_data.py`)**: reads the CSV, normalizes ZIPs, geocodes them, filters to Miami-Dade and Broward, validates and cleans, and writes `data/features_engineered.pkl` (990 records).
+2. **Steps 2–4**: work from the pickled data; the raw CSV isn't needed after step 1.
+3. **Dashboard (`app.py`)**: needs only the trained model and the test-split pickles.
 
 ---
 
-## 🔍 Quality Checks
+## Storage
 
-After downloading, the CSV should have:
-- **10,893 rows** (including header)
-- **14 columns**: type, sub_type, listPrice, lastSoldPrice, sqft, stories, beds, baths, baths_full, baths_full_calc, garage, year_built, zip, sanitized_text
-- **No encoding issues** (UTF-8)
-
-Verify:
-```bash
-# Check row count
-wc -l data/florida_sold_2026.csv
-# Should output: 10894 (10,893 rows + 1 header)
-
-# Check columns
-head -1 data/florida_sold_2026.csv
-# Should show column names
-
-# Check file size
-du -h data/florida_sold_2026.csv
-# Should be ≈14 MB
-```
+`data/florida_sold_2026.csv` is excluded by `.gitignore` (large, third-party data, easily re-downloaded). The pipeline is reproducible from the CSV, the code in `src/`, and `src/real_estate_config.py`.
 
 ---
 
-## 🚀 Next Steps
+## Quality checks
 
-Once the CSV is downloaded and placed in `data/florida_sold_2026.csv`:
+After downloading, the CSV should have 10,893 data rows and these 14 columns: `type`, `sub_type`, `listPrice`, `lastSoldPrice`, `sqft`, `stories`, `beds`, `baths`, `baths_full`, `baths_full_calc`, `garage`, `year_built`, `zip`, `sanitized_text`.
 
 ```bash
-# Run the full pipeline
-python run_pipeline.py
+head -1 data/florida_sold_2026.csv      # column names
+wc -l data/florida_sold_2026.csv        # line count (can exceed 10,894 if descriptions contain newlines)
+```
 
-# Or run individual steps
+---
+
+## Next steps
+
+```bash
+python run_pipeline.py          # full pipeline
+
+# or step by step
 python src/01_load_data.py
 python src/02_engineer_features.py
 python src/03_train_model.py
 python src/04_shap_analysis.py
-python src/05_build_dashboard.py
+
+streamlit run app.py            # launch the dashboard
 ```
-
----
-
-## 📞 Support
-
-- **Download Issues**: See Kaggle account settings (API key, authentication)
-- **File Not Found**: Double-check path and filename (`florida_sold_2026.csv`)
-- **Encoding Errors**: Ensure CSV is UTF-8 (Windows may default to cp1252)
-
----
-
-## 📚 References
-
-- [Kaggle Dataset](https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026)
-- [Kaggle CLI Docs](https://github.com/Kaggle/kaggle-api)
-- [CSV Format Reference](https://tools.ietf.org/html/rfc4180)

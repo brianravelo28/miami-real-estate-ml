@@ -143,53 +143,51 @@ def generate_partial_dependence_plots(shap_values, X_test):
     logger.info(f"✓ Saved dependence plots to {dependence_path}")
     plt.close()
 
-def save_interpretation_guide(X_test):
-    """Create a guide for interpreting SHAP values"""
+def save_interpretation_guide(X_test, shap_values, base_value):
+    """Write a guide for interpreting SHAP values, using this model's actual results"""
     logger.info("\n--- Generating Interpretation Guide ---")
 
     guide_path = os.path.join(REPORTS_DIR, 'SHAP_INTERPRETATION_GUIDE.md')
+    importance = pd.Series(np.abs(shap_values).mean(axis=0), index=X_test.columns)
+    importance = importance.sort_values(ascending=False)
+    base = float(np.ravel(base_value)[0])
+
+    lines = [
+        "# SHAP Interpretation Guide",
+        "",
+        "## What is SHAP?",
+        "SHAP (SHapley Additive exPlanations) values explain a model's prediction by showing how much "
+        "each feature pushes it above or below the base value (the model's average prediction).",
+        "",
+        "Because the model predicts **log price**, SHAP values are in log-price units. "
+        "A SHAP value of +0.10 means roughly +10% on the predicted price.",
+        "",
+        "## Reading the dashboard's SHAP chart",
+        "- **Bars** are individual features' contributions to this prediction (top 10 by magnitude).",
+        "- **Positive** bars increase the predicted price; **negative** bars decrease it.",
+        f"- The base value is about {base:.2f} in log space (roughly ${np.expm1(base):,.0f}); "
+        "the contributions sum to the final log prediction.",
+        "",
+        "## Top Features (mean absolute SHAP value, test set)",
+        "",
+        "| Rank | Feature | Mean abs SHAP |",
+        "|------|---------|---------------|",
+    ]
+    for rank, (name, value) in enumerate(importance.head(8).items(), 1):
+        lines.append(f"| {rank} | `{name}` | {value:.3f} |")
+    lines += [
+        "",
+        "## Limitations",
+        "- SHAP assumes features can be varied independently, which doesn't hold for correlated features "
+        "like `sqft`/`sqft_log` or `lat`/`lon`.",
+        "- Explanations are local to each prediction; the Diagnostics tab shows global importance.",
+        "- The model is trained on Miami-Dade and Broward 2026 sales and may not generalize elsewhere.",
+        "",
+    ]
 
     with open(guide_path, 'w', encoding='utf-8') as f:
-        f.write("# SHAP Interpretation Guide\n\n")
-        
-        f.write("## What is SHAP?\n")
-        f.write("SHAP (SHapley Additive exPlanations) values explain model predictions by showing\n")
-        f.write("how much each feature contributes to pushing the prediction away from the base value.\n\n")
-        
-        f.write("## Reading SHAP Force Plots\n")
-        f.write("- **Left (base value)**: Model's average prediction (~$500K for Miami homes)\n")
-        f.write("- **Colored bars**: Feature contributions\n")
-        f.write("  - Red = increases price\n")
-        f.write("  - Blue = decreases price\n")
-        f.write("- **Right (value)**: Final predicted price\n\n")
-        
-        f.write("## Top Features (by importance)\n")
-        f.write("Based on analysis of your model:\n")
-        f.write("1. **dist_downtown**: Distance to Miami downtown CBD\n")
-        f.write("   - Closer to downtown → Higher price\n\n")
-        
-        f.write("2. **price_per_sqft**: Price normalized by square footage\n")
-        f.write("   - Strong market signal; encodes location premium\n\n")
-        
-        f.write("3. **neighborhood_median_price**: Median price in property's ZIP\n")
-        f.write("   - Key driver of market tier classification\n\n")
-        
-        f.write("4. **property_age**: Years since construction\n")
-        f.write("   - Newer properties generally command premium\n\n")
-        
-        f.write("5. **sqft_log**: Log-transformed living area\n")
-        f.write("   - Non-linear effect; large homes have diminishing returns\n\n")
-        
-        f.write("## Common Patterns\n")
-        f.write("- **Waterfront properties**: Positive contribution from `near_coast`\n")
-        f.write("- **Older neighborhoods**: Negative contribution from `property_age`\n")
-        f.write("- **Emerging areas**: Positive trend signal from `neighborhood_price_trend`\n\n")
-        
-        f.write("## Limitations\n")
-        f.write("- SHAP assumes feature independence (may not hold for lat/lon)\n")
-        f.write("- Explanations are local; global patterns shown in summary plots\n")
-        f.write("- Model trained on 2026 Miami data; may not generalize to other markets\n")
-    
+        f.write("\n".join(lines))
+
     logger.info(f"✓ Saved interpretation guide to {guide_path}")
 
 def main():
@@ -210,10 +208,10 @@ def main():
     generate_partial_dependence_plots(shap_values, X_test)
     
     # Documentation
-    save_interpretation_guide(X_test)
+    save_interpretation_guide(X_test, shap_values, explainer.expected_value)
     
     logger.info("\n" + "="*60)
-    logger.info("✓ Step 4 Complete. Ready to build dashboard.")
+    logger.info("✓ Step 4 Complete. Run the dashboard with: streamlit run app.py")
     logger.info("="*60)
 
 if __name__ == '__main__':

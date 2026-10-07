@@ -24,6 +24,8 @@ TRAIN_DATA_PATH = os.path.join(DATA_DIR, 'X_train.pkl')
 TEST_DATA_PATH = os.path.join(DATA_DIR, 'X_test.pkl')
 TRAIN_TARGET_PATH = os.path.join(DATA_DIR, 'y_train.pkl')
 TEST_TARGET_PATH = os.path.join(DATA_DIR, 'y_test.pkl')
+# Train-only ZIP stats and other lookups the dashboard needs at prediction time
+FEATURE_ARTIFACTS_PATH = os.path.join(DATA_DIR, 'feature_artifacts.pkl')
 
 # Model files
 MODEL_PATH = os.path.join(MODELS_DIR, 'lightgbm_miami_v1.pkl')
@@ -98,20 +100,16 @@ LIGHTGBM_NUM_ROUNDS = 200
 # ============================================================================
 FEATURE_COLS = [
     # Property features
-    'beds', 'baths', 'sqft', 'sqft_log', 'property_age', 'price_per_sqft',
-    'list_to_sold_ratio', 'is_condo', 'is_townhouse',
+    'beds', 'baths', 'sqft', 'sqft_log', 'property_age', 'is_condo', 'is_townhouse',
 
     # Geospatial
     'lat', 'lon', 'dist_downtown', 'dist_brickell', 'dist_beach',
 
-    # Neighborhood
+    # Neighborhood (computed from training sales only; see 02_engineer_features.py)
     'neighborhood_median_price', 'neighborhood_price_std', 'neighborhood_sales_count',
 
-    # Flood risk
+    # Flood risk (latitude proxy)
     'flood_risk_percentile',
-
-    # Temporal
-    'sale_year', 'sale_month',
 ]
 
 # ============================================================================

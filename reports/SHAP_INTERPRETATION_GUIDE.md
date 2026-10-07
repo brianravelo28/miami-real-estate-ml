@@ -1,39 +1,29 @@
 # SHAP Interpretation Guide
 
 ## What is SHAP?
-SHAP (SHapley Additive exPlanations) values explain model predictions by showing
-how much each feature contributes to pushing the prediction away from the base value.
+SHAP (SHapley Additive exPlanations) values explain a model's prediction by showing how much each feature pushes it above or below the base value (the model's average prediction).
 
-## Reading SHAP Force Plots
-- **Left (base value)**: Model's average prediction (~$500K for Miami homes)
-- **Colored bars**: Feature contributions
-  - Red = increases price
-  - Blue = decreases price
-- **Right (value)**: Final predicted price
+Because the model predicts **log price**, SHAP values are in log-price units. A SHAP value of +0.10 means roughly +10% on the predicted price.
 
-## Top Features (by importance)
-Based on analysis of your model:
-1. **dist_downtown**: Distance to Miami downtown CBD
-   - Closer to downtown → Higher price
+## Reading the dashboard's SHAP chart
+- **Bars** are individual features' contributions to this prediction (top 10 by magnitude).
+- **Positive** bars increase the predicted price; **negative** bars decrease it.
+- The base value is about 13.20 in log space (roughly $540,973); the contributions sum to the final log prediction.
 
-2. **price_per_sqft**: Price normalized by square footage
-   - Strong market signal; encodes location premium
+## Top Features (mean absolute SHAP value, test set)
 
-3. **neighborhood_median_price**: Median price in property's ZIP
-   - Key driver of market tier classification
-
-4. **property_age**: Years since construction
-   - Newer properties generally command premium
-
-5. **sqft_log**: Log-transformed living area
-   - Non-linear effect; large homes have diminishing returns
-
-## Common Patterns
-- **Waterfront properties**: Positive contribution from `near_coast`
-- **Older neighborhoods**: Negative contribution from `property_age`
-- **Emerging areas**: Positive trend signal from `neighborhood_price_trend`
+| Rank | Feature | Mean abs SHAP |
+|------|---------|---------------|
+| 1 | `sqft` | 0.347 |
+| 2 | `is_condo` | 0.095 |
+| 3 | `lon` | 0.089 |
+| 4 | `dist_downtown` | 0.066 |
+| 5 | `sqft_log` | 0.061 |
+| 6 | `lat` | 0.055 |
+| 7 | `property_age` | 0.054 |
+| 8 | `neighborhood_price_std` | 0.054 |
 
 ## Limitations
-- SHAP assumes feature independence (may not hold for lat/lon)
-- Explanations are local; global patterns shown in summary plots
-- Model trained on 2026 Miami data; may not generalize to other markets
+- SHAP assumes features can be varied independently, which doesn't hold for correlated features like `sqft`/`sqft_log` or `lat`/`lon`.
+- Explanations are local to each prediction; the Diagnostics tab shows global importance.
+- The model is trained on Miami-Dade and Broward 2026 sales and may not generalize elsewhere.

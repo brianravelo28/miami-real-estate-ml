@@ -1,6 +1,6 @@
 """
 Master Pipeline Executor
-Runs all steps in sequence: Load → Features → Train → SHAP → Dashboard
+Runs all steps in sequence: Load → Features → Train → SHAP
 Use this to execute the full pipeline with: python run_pipeline.py
 """
 
@@ -16,7 +16,7 @@ STEPS = [
     {
         'name': 'Step 1: Load Data',
         'script': 'src/01_load_data.py',
-        'description': 'Download and validate Florida real estate dataset'
+        'description': 'Load, geocode, and validate the Florida real estate dataset'
     },
     {
         'name': 'Step 2: Engineer Features',
@@ -32,11 +32,6 @@ STEPS = [
         'name': 'Step 4: SHAP Analysis',
         'script': 'src/04_shap_analysis.py',
         'description': 'Generate SHAP explanations and visualizations'
-    },
-    {
-        'name': 'Step 5: Build Dashboard',
-        'script': 'src/05_build_dashboard.py',
-        'description': 'Launch interactive Plotly Dash application'
     },
 ]
 
@@ -103,8 +98,8 @@ def main():
     if failed == 0:
         logger.info("\n✓ ALL STEPS COMPLETED SUCCESSFULLY!")
         logger.info("\nNext: Start the dashboard with:")
-        logger.info("  python src/05_build_dashboard.py")
-        logger.info("\nThen open browser to: http://localhost:7860")
+        logger.info("  streamlit run app.py")
+        logger.info("\nThen open browser to: http://localhost:8501")
     else:
         logger.error(f"\n✗ Pipeline failed. Please review errors above.")
     
