@@ -1,5 +1,7 @@
 # 🏠 Miami Real Estate Price Predictor
 
+![Miami Real Estate Price Predictor dashboard](docs/screenshot.png)
+
 A machine learning pipeline that predicts residential property prices in Miami-Dade and Broward counties using geospatial features, neighborhood aggregations, and gradient boosting, with SHAP-based feature attribution and an interactive Streamlit dashboard.
 
 **Live Demo**: [miami-real-estate-ml.onrender.com](https://miami-real-estate-ml.onrender.com/) (free tier, so the first load may take a moment to wake up)
