@@ -113,7 +113,7 @@ with st.sidebar:
 
     **Price Range:**
 
-    \$50K–\$10M
+    \\$50K–\\$10M
     """)
     st.markdown("### 🧩 Features")
     st.selectbox("Features", FEATURE_NAMES, label_visibility="collapsed")
@@ -322,7 +322,7 @@ with tab1:
 
         with col2:
             st.info(f"""
-            **Typical range**: \${price_low:,.0f} — \${price_high:,.0f}
+            **Typical range**: \\${price_low:,.0f} — \\${price_high:,.0f}
 
             80% of the model's errors on {len(X_test)} held-out sales fall inside a range this wide, so treat this as a rough estimate.
             """)
@@ -363,7 +363,7 @@ with tab1:
         st.markdown("**Key Insights:**")
         st.write(f"""
         - **Size** ({sqft:,} sq ft) is the strongest overall driver in the model
-        - **Neighborhood**: nearest ZIP in the data is {nearest_zip} (median sale \${zip_row['median']:,.0f}, {int(zip_row['count'])} training sales)
+        - **Neighborhood**: nearest ZIP in the data is {nearest_zip} (median sale \\${zip_row['median']:,.0f}, {int(zip_row['count'])} training sales)
         - **Distance to downtown Miami** is {dist_downtown:.1f} miles
         - **Property age** is {property_age} years
         """)
@@ -377,7 +377,7 @@ with tab2:
 
     top_zips = ZIP_TABLE[ZIP_TABLE['count'] >= 5].sort_values('median', ascending=False).head(5)
     top_lines = "\n".join(
-        f"{i}. ZIP {z} - \${row['median'] / 1000:,.0f}K median ({int(row['count'])} sales)"
+        f"{i}. ZIP {z} - \\${row['median'] / 1000:,.0f}K median ({int(row['count'])} sales)"
         for i, (z, row) in enumerate(top_zips.iterrows(), 1)
     )
     st.info(
