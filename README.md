@@ -1,19 +1,10 @@
----
-title: Miami Real Estate Price Predictor
-emoji: 🏠
-colorFrom: blue
-colorTo: green
-sdk: streamlit
-sdk_version: 1.28.0
-app_file: app.py
-pinned: false
----
-
 # 🏠 Miami Real Estate Price Predictor
 
-A production-ready machine learning pipeline that predicts residential property prices in Miami using geospatial features, neighborhood aggregations, and gradient boosting. Features explainable predictions with SHAP values and an interactive web dashboard.
+A machine learning pipeline that predicts residential property prices in Miami-Dade and Broward counties using geospatial features, neighborhood aggregations, and gradient boosting, with SHAP-based feature attribution and an interactive Streamlit dashboard.
 
-**Live Demo**: Interactive dashboard at `http://localhost:7860` after running the pipeline.
+**Live Demo**: [miami-real-estate-ml.onrender.com](https://miami-real-estate-ml.onrender.com/) (free tier, so the first load may take a moment to wake up)
+
+**Run locally**: `streamlit run app.py` (opens at `http://localhost:8501`)
 
 ---
 
@@ -21,11 +12,11 @@ A production-ready machine learning pipeline that predicts residential property 
 
 This project demonstrates end-to-end applied ML: data acquisition → feature engineering → model training → explainability → deployment. It combines:
 
-- **1,068 Miami property sales** (2026 Kaggle dataset)
+- **990 Miami-Dade & Broward property sales** (2026 Kaggle dataset, filtered by county via ZIP-code geocoding)
 - **20 engineered features** (property, geospatial, neighborhood, temporal)
-- **LightGBM regressor** with R² = 0.987 and 6.1% mean price error
+- **LightGBM regressor** with R² = 0.992 and 4.6% mean price error
 - **SHAP explanations** for every prediction
-- **Interactive Dash dashboard** for price estimation and model diagnostics
+- **Interactive Streamlit dashboard** for price estimation, a neighborhood map, and model diagnostics
 
 ---
 
@@ -33,29 +24,29 @@ This project demonstrates end-to-end applied ML: data acquisition → feature en
 
 | Metric | Value | Target | Status |
 |--------|-------|--------|--------|
-| **R² Score** | 0.9874 | ≥ 0.80 | ✅ |
-| **RMSE (log scale)** | 0.1007 | ≤ 0.20 | ✅ |
-| **MAE (log scale)** | 0.0596 | ≤ 0.18 | ✅ |
-| **Mean Price Error** | 6.1% | ≤ 20% | ✅ |
+| **R² Score** | 0.9921 | ≥ 0.80 | ✅ |
+| **RMSE (log scale)** | 0.0674 | ≤ 0.20 | ✅ |
+| **MAE (log scale)** | 0.0447 | ≤ 0.18 | ✅ |
+| **Mean Price Error** | 4.6% | ≤ 20% | ✅ |
 
-**Top 3 Features** (by SHAP importance):
+**Top 3 Features** (by model gain):
 1. `price_per_sqft` — Market signal & location premium
-2. `sqft` — Property size (non-linear effects via log transform)
-3. `neighborhood_median_price` — ZIP-level market tier
+2. `sqft` — Property size
+3. `sqft_log` — Log-scaled size (non-linear effects)
 
 ---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.9+
+- Python 3.11+
 - pip or conda
 
 ### Installation
 
 ```bash
 # Clone repo
-git clone https://github.com/yourusername/miami-real-estate-ml.git
+git clone https://github.com/brianravelo28/miami-real-estate-ml.git
 cd miami-real-estate-ml
 
 # Install dependencies
@@ -69,18 +60,23 @@ pip install -r requirements.txt
 ### Run Full Pipeline
 
 ```bash
-# Execute all 5 steps in sequence
+# Execute the pipeline steps in sequence
 python run_pipeline.py
 ```
 
 Or run individual steps:
 
 ```bash
-python src/01_load_data.py              # Load & validate
+python src/01_load_data.py              # Load, geocode & validate
 python src/02_engineer_features.py      # Feature creation
 python src/03_train_model.py            # Model training
 python src/04_shap_analysis.py          # Explainability
-python src/05_build_dashboard.py        # Web app (http://localhost:7860)
+```
+
+Then launch the dashboard:
+
+```bash
+streamlit run app.py                    # http://localhost:8501
 ```
 
 ---
@@ -91,16 +87,18 @@ python src/05_build_dashboard.py        # Web app (http://localhost:7860)
 miami-real-estate-ml/
 ├── README.md                          # This file
 ├── LICENSE                            # MIT license
+├── app.py                             # Streamlit dashboard (entry point)
 ├── requirements.txt                   # Python dependencies
+├── render.yaml, Dockerfile            # Deployment config
 ├── .gitignore                         # Git ignore rules
 ├── run_pipeline.py                    # Master executor
 │
 ├── src/
-│   ├── 01_load_data.py                # Step 1: Load & validate data
+│   ├── 01_load_data.py                # Step 1: Load, geocode & validate data
 │   ├── 02_engineer_features.py        # Step 2: Feature engineering
 │   ├── 03_train_model.py              # Step 3: Train LightGBM
 │   ├── 04_shap_analysis.py            # Step 4: SHAP explanations
-│   ├── 05_build_dashboard.py          # Step 5: Interactive dashboard
+│   ├── 05_build_dashboard.py          # Legacy Dash dashboard (superseded by app.py)
 │   └── real_estate_config.py          # Single source of truth (paths, params)
 │
 ├── data/
@@ -123,14 +121,11 @@ miami-real-estate-ml/
 │   ├── shap_dependence_plots.png      # Feature dependence analysis
 │   └── SHAP_INTERPRETATION_GUIDE.md   # How to read SHAP plots
 │
-├── notebooks/
-│   ├── 01_EDA.ipynb                   # Exploratory data analysis
-│   └── 02_Feature_Engineering_Deep_Dive.ipynb  # Feature creation rationale
-│
 └── docs/
     ├── ARCHITECTURE.md                # System design & data flow
     ├── METHODOLOGY.md                 # ML approach & trade-offs
-    └── DATA_SCHEMA.md                 # Feature definitions & transformations
+    ├── DATA_SCHEMA.md                 # Feature definitions & transformations
+    └── DEPLOYMENT.md                  # Render deployment guide
 ```
 
 ---
@@ -140,37 +135,35 @@ miami-real-estate-ml/
 ```
 Florida Real Estate CSV (Kaggle)
     ↓ (Step 1: Load & Validate)
-Cleaned dataset: 1,068 Miami properties
+Cleaned dataset: 990 Miami-Dade & Broward properties
     ↓ (Step 2: Feature Engineering)
 20 engineered features + train/test split (80/20)
     ↓ (Step 3: Train Model)
 LightGBM model (200 boosting rounds)
     ├─→ (Step 4: SHAP Analysis) → Explainability plots
-    └─→ (Step 5: Dashboard) → Interactive predictions
+    └─→ Streamlit dashboard (app.py) → Interactive predictions
 ```
 
 ---
 
 ## 📊 Dashboard Features
 
-The interactive Dash app (`localhost:7860`) provides three tabs:
+The Streamlit app (`streamlit run app.py`) provides three tabs:
 
 ### 🔍 **Tab 1: Search & Predict**
-- Input property details (beds, baths, sqft, location)
-- Get instant price prediction + confidence band
-- View SHAP force plot explaining the prediction
-- See "similar sales" from training data
+- Input property details (beds, baths, sqft, property type)
+- Pick a location by panning a map under a fixed crosshair (active within Miami-Dade/Broward)
+- Get a price prediction with a confidence range
+- View a SHAP bar chart of the features driving that prediction
 
 ### 🗺️ **Tab 2: Neighborhood Map**
-- Interactive Folium heatmap of Miami
-- Price distribution by ZIP code
-- Hover for neighborhood statistics
+- Interactive Folium map of predicted prices across Miami-Dade & Broward
+- Median, mean, and range stats that update to the properties in the current map view
 
 ### 📈 **Tab 3: Model Diagnostics**
 - R² score, RMSE, MAE breakdown
 - Residual plot (predictions vs actual)
-- SHAP summary plot (feature importance)
-- Top 10 features by gain
+- Global feature importance (mean absolute SHAP value)
 
 ---
 
@@ -188,6 +181,9 @@ MAX_SQFT = 10_000
 # Model hyperparameters
 LIGHTGBM_NUM_ROUNDS = 200
 LIGHTGBM_LEARNING_RATE = 0.05
+
+# Coverage area (filtered by county via ZIP geocoding)
+TARGET_COUNTIES = ['Miami-Dade', 'Broward']
 
 # Geospatial reference points
 DOWNTOWN_MIAMI = (25.7617, -80.1918)
@@ -248,8 +244,8 @@ Example: "This property is predicted at $750K because price_per_sqft is high (+$
 ## 🔬 Model Limitations & Next Steps
 
 ### Current Limitations
-- Trained only on Miami 2026 data; may not generalize to other cities/years
-- Geospatial features use synthetic lat/lon (based on ZIP codes)
+- Trained only on Miami-Dade & Broward 2026 data; may not generalize to other areas/years
+- Geospatial features use ZIP-code centroids (plus small jitter), not exact property addresses
 - No flood risk from FEMA shapefiles (using latitude proxy instead)
 - No macroeconomic features (interest rates, inventory, etc.)
 
@@ -269,8 +265,9 @@ Core libraries (see `requirements.txt` for versions):
 - `scikit-learn` — ML utilities (train/test split, metrics)
 - `lightgbm` — Gradient boosting
 - `shap` — Model explainability
-- `plotly`, `dash` — Interactive visualizations
-- `geopy` — Distance calculations
+- `streamlit`, `plotly` — Dashboard and interactive charts
+- `folium`, `streamlit-folium` — Interactive maps
+- `geopy`, `pgeocode` — Distance calculations and ZIP-code geocoding
 - `pillow` — Image handling
 
 ---
@@ -294,10 +291,9 @@ Found a bug or want to improve the model? Pull requests welcome!
 
 ---
 
-## 📞 Contact & Attribution
+## 📞 Attribution
 
-**Author**: Your Name  
-**Email**: your.email@example.com  
+**Author**: [brianravelo28](https://github.com/brianravelo28)  
 **Dataset**: [Florida Real Estate Sold 2026](https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026) by Kanchana Ranasinghe
 
 ---
@@ -306,10 +302,9 @@ Found a bug or want to improve the model? Pull requests welcome!
 
 - [SHAP Documentation](https://shap.readthedocs.io/) — Model interpretability
 - [LightGBM Best Practices](https://lightgbm.readthedocs.io/en/latest/Features.html) — Hyperparameter tuning
-- [Dash by Plotly](https://dash.plotly.com/) — Interactive web apps
+- [Streamlit Docs](https://docs.streamlit.io/) — Dashboard framework
 - [Geospatial Feature Engineering](https://towardsdatascience.com/spatial-machine-learning-4c7d86920d56) — Location-based ML
 
 ---
 
-**Last Updated**: August 2026  
-**Status**: Production-ready ✅
+**Last Updated**: October 2026
