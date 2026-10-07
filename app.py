@@ -92,10 +92,11 @@ with st.sidebar:
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     pct_error = (np.exp(mae) - 1) * 100
+    r2_note = "meets 0.80 target" if r2 >= 0.80 else "-below 0.80 target"
 
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("R² Score", f"{r2:.4f}")
+        st.metric("R² Score", f"{r2:.4f}", r2_note)
         st.metric("RMSE", f"{rmse:.4f}", "log scale")
     with col2:
         st.metric("MAE", f"{mae:.4f}", f"{pct_error:.1f}%")
@@ -244,9 +245,12 @@ with tab1:
             crosshair.style.top = (iRect.top + iRect.height / 2 - cRect.top) + 'px';
         }
         positionCrosshair();
-        window.parent.addEventListener('resize', positionCrosshair);
-        const intervalId = setInterval(positionCrosshair, 300);
-        setTimeout(() => clearInterval(intervalId), 30000);
+        // Keep polling for the life of the page (layout can shift after sidebar toggles,
+        // window resizes, or reruns); clear any timer left by an earlier run of this script.
+        const parentWin = window.parent;
+        if (parentWin.__pinCrosshairTimer) clearInterval(parentWin.__pinCrosshairTimer);
+        parentWin.__pinCrosshairTimer = setInterval(positionCrosshair, 250);
+        parentWin.addEventListener('resize', positionCrosshair);
     })();
     </script>
     """, height=0)
@@ -450,7 +454,7 @@ with tab3:
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("R² Score", f"{r2:.4f}")
+        st.metric("R² Score", f"{r2:.4f}", r2_note)
     with col2:
         st.metric("Mean Absolute Error", f"{mae:.4f}", f"{pct_error:.1f}% price error")
     with col3:
