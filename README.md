@@ -102,7 +102,6 @@ miami-real-estate-ml/
 │   ├── 02_engineer_features.py        # Step 2: Feature engineering
 │   ├── 03_train_model.py              # Step 3: Train LightGBM
 │   ├── 04_shap_analysis.py            # Step 4: SHAP explanations
-│   ├── 05_build_dashboard.py          # Legacy Dash dashboard (superseded by app.py)
 │   └── real_estate_config.py          # Single source of truth (paths, params)
 │
 ├── data/

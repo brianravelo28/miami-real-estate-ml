@@ -41,8 +41,6 @@ Kaggle CSV: Florida Real Estate Sold 2026 (10,893 statewide records)
    - Tab 3: Diagnostics
 ```
 
-`src/05_build_dashboard.py` is the original Dash version of the dashboard and is superseded by `app.py`.
-
 ---
 
 ## Components
