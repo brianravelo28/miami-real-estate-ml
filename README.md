@@ -33,6 +33,21 @@ This project demonstrates end-to-end applied ML: data acquisition → feature en
 
 Evaluated on 198 held-out sales. Training R² is 0.968, so the model overfits somewhat on this small (792-row) training set. An earlier version reported R² = 0.992, but that came from features computed from the sale price (target leakage), which have since been removed (see [Methodology](docs/METHODOLOGY.md)).
 
+### Model comparison (cross-validated)
+
+A single 198-row split is noisy, so `src/05_evaluate_models.py` compares models with 5-fold × 3-repeat cross-validation on the 792 development rows (ZIP stats rebuilt inside each fold, so there's no leakage), then scores the untouched holdout once:
+
+| Model | CV R² (mean ± sd) | Holdout R² |
+|-------|-------------------|------------|
+| Predict the mean | -0.010 ± 0.012 | 0.000 |
+| Linear (property features only) | 0.606 ± 0.041 | 0.544 |
+| Ridge (all 16 features) | 0.766 ± 0.030 | 0.729 |
+| Random forest | 0.818 ± 0.031 | 0.796 |
+| **LightGBM (current config)** | **0.827 ± 0.031** | **0.826** |
+| LightGBM (tuned, 40-config random search) | 0.837 ± 0.029 | 0.824 |
+
+Takeaways: location and neighborhood features lift R² from 0.61 to 0.77 (Ridge), and tree models add roughly another 0.05–0.06. The tuning search found nothing meaningfully better (+0.01 in CV, within noise, and no gain on the holdout), so the current config stays. The train/test gap is not something these hyperparameters fix; more data or better features are the lever. Full details: [`reports/model_comparison.md`](reports/model_comparison.md).
+
 **Top 3 Features** (by model gain):
 1. `sqft` — Property size
 2. `sqft_log` — Log-scaled size (non-linear effects)
@@ -75,6 +90,7 @@ python src/01_load_data.py              # Load, geocode & validate
 python src/02_engineer_features.py      # Feature creation
 python src/03_train_model.py            # Model training
 python src/04_shap_analysis.py          # Explainability
+python src/05_evaluate_models.py        # Cross-validation, baselines, tuning (~2 min, optional)
 ```
 
 Then launch the dashboard:
@@ -102,6 +118,7 @@ miami-real-estate-ml/
 │   ├── 02_engineer_features.py        # Step 2: Feature engineering
 │   ├── 03_train_model.py              # Step 3: Train LightGBM
 │   ├── 04_shap_analysis.py            # Step 4: SHAP explanations
+│   ├── 05_evaluate_models.py          # Step 5 (optional): CV, baselines, hyperparameter search
 │   └── real_estate_config.py          # Single source of truth (paths, params)
 │
 ├── data/

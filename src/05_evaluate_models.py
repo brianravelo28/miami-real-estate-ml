@@ -1,0 +1,260 @@
+"""
+Step 5: Model Evaluation (cross-validation, baselines, small hyperparameter search)
+
+Protocol (so the numbers are honest):
+  1. Use the same 80/20 split as step 2. The 198-row holdout is NOT touched until the end.
+  2. All comparison and tuning uses repeated K-fold CV on the 792 development rows only.
+  3. Inside every fold, ZIP price stats are computed from that fold's training rows only
+     (leave-one-out for those rows), exactly like the real pipeline, so CV has no leakage.
+  4. The holdout is scored once per model, after any choices are made.
+
+Outputs: console table + reports/model_comparison.md
+This script does not change the saved model or the config.
+"""
+
+import importlib.util
+import logging
+import os
+import sys
+import time
+
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+from sklearn.dummy import DummyRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import RepeatedKFold
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from real_estate_config import *  # noqa: E402,F401,F403
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+CV_FOLDS = 5
+CV_REPEATS = 3
+SEARCH_ITERATIONS = 40
+SEARCH_SEED = 7
+PROPERTY_COLS = ['sqft_log', 'beds', 'baths', 'property_age', 'is_condo', 'is_townhouse']
+
+
+def load_feature_module():
+    """Import 02_engineer_features.py (its filename starts with a digit)"""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '02_engineer_features.py')
+    spec = importlib.util.spec_from_file_location('engineer_features', path)
+    module = importlib.util.module_from_spec(spec)
+    logging.disable(logging.INFO)  # silence its step logging while importing/using it
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_frames(fe):
+    """Cleaned data -> row-level features that don't depend on any price statistic"""
+    df = pickle_load(FEATURES_PATH)
+    df = fe.engineer_property_features(df)
+    df = fe.engineer_geospatial_features(df)
+    df = fe.engineer_flood_risk(df)
+    return df
+
+
+def pickle_load(path):
+    import pickle
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
+def make_fold(fe, train_df, valid_df):
+    """Leakage-free matrices for one train/valid pair"""
+    tr, va, _, _ = fe.add_neighborhood_features(train_df.copy(), valid_df.copy())
+    X_tr, y_tr = fe.make_xy(tr)
+    X_va, y_va = fe.make_xy(va)
+    return X_tr, y_tr, X_va, y_va
+
+
+def lgb_model(params, rounds):
+    class Wrapper:
+        def fit(self, X, y):
+            self.m = lgb.train({**LIGHTGBM_PARAMS, **params, 'num_threads': 1}, lgb.Dataset(X, y),
+                               num_boost_round=rounds)
+            return self
+
+        def predict(self, X):
+            return self.m.predict(X)
+    return Wrapper()
+
+
+class ColumnSubset:
+    """Wrap a model so it only sees some columns (used for the property-only linear baseline)"""
+    def __init__(self, model, cols):
+        self.model, self.cols = model, cols
+
+    def fit(self, X, y):
+        self.model.fit(X[self.cols], y)
+        return self
+
+    def predict(self, X):
+        return self.model.predict(X[self.cols])
+
+
+def metrics(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    return {
+        'r2': r2_score(y_true, y_pred),
+        'mae': mae,
+        'rmse': float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        'pct': (np.exp(mae) - 1) * 100,
+    }
+
+
+def cv_score(factory, folds):
+    """Mean/sd of each metric across folds, plus mean train R^2 (to show the overfit gap)"""
+    rows, train_r2 = [], []
+    for X_tr, y_tr, X_va, y_va in folds:
+        model = factory().fit(X_tr, y_tr)
+        rows.append(metrics(y_va, model.predict(X_va)))
+        train_r2.append(r2_score(y_tr, model.predict(X_tr)))
+    frame = pd.DataFrame(rows)
+    out = {f'{c}_mean': frame[c].mean() for c in frame}
+    out.update({f'{c}_sd': frame[c].std() for c in frame})
+    out['train_r2'] = float(np.mean(train_r2))
+    return out
+
+
+def random_params(rng):
+    return {
+        'num_leaves': int(rng.choice([4, 7, 15, 31])),
+        'min_data_in_leaf': int(rng.choice([5, 10, 20, 30, 50])),
+        'learning_rate': float(rng.choice([0.02, 0.03, 0.05, 0.08])),
+        'feature_fraction': float(rng.choice([0.6, 0.8, 1.0])),
+        'bagging_fraction': float(rng.choice([0.7, 0.8, 1.0])),
+        'lambda_l2': float(rng.choice([0.0, 1.0, 5.0, 20.0])),
+        'seed': 42,
+    }, int(rng.choice([100, 200, 400, 600]))
+
+
+def fmt(res, key):
+    return f"{res[key + '_mean']:.3f} ± {res[key + '_sd']:.3f}"
+
+
+def main():
+    t0 = time.time()
+    fe = load_feature_module()
+    df = build_frames(fe)
+
+    dev_df, holdout_df = fe.split_data(df)
+    logging.disable(logging.NOTSET)
+    logger.info("=" * 70)
+    logger.info("STEP 5: MODEL EVALUATION (CV on development rows, holdout scored once)")
+    logger.info("=" * 70)
+    logger.info(f"Development rows: {len(dev_df)}   Holdout rows (untouched until the end): {len(holdout_df)}")
+    logger.info(f"CV: {CV_FOLDS}-fold x {CV_REPEATS} repeats = {CV_FOLDS * CV_REPEATS} folds; ZIP stats built inside each fold")
+
+    # Build CV folds once (neighborhood features are expensive-ish and shared by all models)
+    logging.disable(logging.INFO)
+    splitter = RepeatedKFold(n_splits=CV_FOLDS, n_repeats=CV_REPEATS, random_state=RANDOM_STATE)
+    folds = []
+    for tr_idx, va_idx in splitter.split(dev_df):
+        folds.append(make_fold(fe, dev_df.iloc[tr_idx], dev_df.iloc[va_idx]))
+    holdout_fold = make_fold(fe, dev_df, holdout_df)  # ZIP stats from all development rows
+    logging.disable(logging.NOTSET)
+
+    default_rounds = LIGHTGBM_NUM_ROUNDS
+    baselines = {
+        'Predict the mean': lambda: DummyRegressor(strategy='mean'),
+        'Linear (property features only)': lambda: ColumnSubset(LinearRegression(), PROPERTY_COLS),
+        'Ridge (all 16 features)': lambda: make_pipeline(StandardScaler(), Ridge(alpha=10.0)),
+        'Random forest': lambda: RandomForestRegressor(
+            n_estimators=300, min_samples_leaf=3, max_features=0.6, random_state=42, n_jobs=-1),
+        'LightGBM (current config)': lambda: lgb_model({}, default_rounds),
+    }
+
+    results = {}
+    for name, factory in baselines.items():
+        results[name] = cv_score(factory, folds)
+        logger.info(f"  {name:<34} CV R2 {fmt(results[name], 'r2')}   MAE {fmt(results[name], 'mae')}")
+
+    # Small random search, scored with the same CV folds
+    logger.info(f"\nRandom hyperparameter search: {SEARCH_ITERATIONS} configs x {len(folds)} folds ...")
+    rng = np.random.default_rng(SEARCH_SEED)
+    trials = []
+    for i in range(SEARCH_ITERATIONS):
+        params, rounds = random_params(rng)
+        res = cv_score(lambda p=params, r=rounds: lgb_model(p, r), folds)
+        trials.append((res['r2_mean'], params, rounds, res))
+    trials.sort(key=lambda t: -t[0])
+    best_r2, best_params, best_rounds, best_res = trials[0]
+    results['LightGBM (tuned)'] = best_res
+    logger.info(f"  best CV R2 {best_r2:.3f} with rounds={best_rounds}, params={best_params}")
+    logger.info(f"  (top 5 CV R2: {', '.join(f'{t[0]:.3f}' for t in trials[:5])}; "
+                f"median of all configs: {np.median([t[0] for t in trials]):.3f})")
+
+    # Holdout: score each model once, refit on all development rows
+    X_dev, y_dev, X_ho, y_ho = holdout_fold
+    holdout = {}
+    factories = dict(baselines)
+    factories['LightGBM (tuned)'] = lambda: lgb_model(best_params, best_rounds)
+    for name, factory in factories.items():
+        model = factory().fit(X_dev, y_dev)
+        holdout[name] = metrics(y_ho, model.predict(X_ho))
+
+    logger.info("\n" + "=" * 70)
+    logger.info(f"{'Model':<34}{'CV R2':>16}{'CV MAE (log)':>16}{'Train R2':>10}{'Holdout R2':>12}{'Holdout MAE':>13}")
+    for name in factories:
+        r, h = results[name], holdout[name]
+        logger.info(f"{name:<34}{fmt(r, 'r2'):>16}{fmt(r, 'mae'):>16}{r['train_r2']:>10.3f}{h['r2']:>12.3f}{h['mae']:>13.3f}")
+    logger.info("=" * 70)
+
+    write_report(results, holdout, factories, best_params, best_rounds, trials, len(dev_df), len(holdout_df))
+    logger.info(f"Done in {time.time() - t0:.0f}s. Report: {os.path.join(REPORTS_DIR, 'model_comparison.md')}")
+
+
+def write_report(results, holdout, factories, best_params, best_rounds, trials, n_dev, n_holdout):
+    lines = [
+        "# Model Comparison",
+        "",
+        "Generated by `src/05_evaluate_models.py`. Re-run it after changing data or features.",
+        "",
+        "## Protocol",
+        f"- {n_dev} development rows are used for cross-validation and tuning; "
+        f"{n_holdout} holdout rows are scored once at the end.",
+        f"- Repeated {CV_FOLDS}-fold CV x {CV_REPEATS} repeats ({CV_FOLDS * CV_REPEATS} folds). "
+        "Reported as mean ± standard deviation across folds.",
+        "- ZIP price statistics are recomputed inside every fold from that fold's training rows "
+        "only (leave-one-out for those rows), so CV has no target leakage.",
+        "- Errors are on log price. MAE of 0.24 means a typical multiplicative miss of about 27%.",
+        "",
+        "## Results",
+        "",
+        "| Model | CV R² | CV MAE (log) | Train R² | Holdout R² | Holdout MAE (log) |",
+        "|-------|-------|--------------|----------|------------|-------------------|",
+    ]
+    for name in factories:
+        r, h = results[name], holdout[name]
+        lines.append(f"| {name} | {fmt(r, 'r2')} | {fmt(r, 'mae')} | {r['train_r2']:.3f} | "
+                     f"{h['r2']:.3f} | {h['mae']:.3f} |")
+    lines += [
+        "",
+        "## Hyperparameter search",
+        f"- {SEARCH_ITERATIONS} random LightGBM configurations, each scored with the same CV folds.",
+        f"- Best by CV R²: `{best_params}` with `{best_rounds}` boosting rounds "
+        "(everything not listed uses the defaults in `real_estate_config.py`).",
+        f"- Spread across configurations: best {trials[0][0]:.3f}, "
+        f"median {np.median([t[0] for t in trials]):.3f}, worst {trials[-1][0]:.3f}.",
+        "- The best CV score is slightly optimistic because it was picked as the maximum of "
+        f"{SEARCH_ITERATIONS} tries; the holdout column is the unbiased check.",
+        "",
+        "## Caveats",
+        "- The holdout is only a few hundred rows, so differences of a few hundredths in R² are within noise.",
+        "- Only one data source and one year; no time-based validation is possible without sale dates.",
+        "",
+    ]
+    with open(os.path.join(REPORTS_DIR, 'model_comparison.md'), 'w', encoding='utf-8') as f:
+        f.write("\n".join(lines))
+
+
+if __name__ == '__main__':
+    main()

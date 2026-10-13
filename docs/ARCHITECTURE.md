@@ -103,6 +103,10 @@ Top features by gain: `sqft` (2027), `sqft_log` (336), `neighborhood_median_pric
 
 `shap.TreeExplainer` on the test set (198 × 16 SHAP matrix, base value ≈ 13.2 in log space, ≈ $540K). Generates summary, importance, force, and dependence plots; see `reports/SHAP_INTERPRETATION_GUIDE.md`.
 
+### Model evaluation, optional (`src/05_evaluate_models.py`)
+
+Not part of the deployed app. Splits the data like step 2, keeps the 198-row holdout untouched, and runs repeated 5-fold CV (3 repeats) on the 792 development rows, rebuilding the ZIP stats inside every fold so CV has no leakage. It compares five models (predict-the-mean, property-only linear, ridge, random forest, LightGBM), runs a 40-config random search for LightGBM, then scores the holdout once. Output: `reports/model_comparison.md`. It does not modify the saved model or the config (~2 minutes to run).
+
 ### 5. Dashboard (`app.py`)
 
 Streamlit app. On startup it loads the model and test split and computes SHAP values once (`st.cache_resource`).
@@ -145,7 +149,7 @@ Deployed on Render's free tier (auto-deploys on push to `main`): https://miami-r
 
 ## Future enhancements
 
-1. Cross-validation and a small hyperparameter search to narrow the train/test gap
+1. More data or better features (cross-validation and a hyperparameter search are done and didn't narrow the train/test gap)
 2. Proper prediction intervals via quantile regression (the current range is empirical)
 3. FEMA flood zones instead of the latitude proxy
 4. Real sale dates for seasonality and trend features

@@ -84,10 +84,15 @@ LightGBM was chosen because it trains in seconds on ~1K rows, handles numeric fe
 
 | Model | Verdict |
 |-------|---------|
-| Linear regression | Can't capture non-linearities; baseline only |
-| Random forest / XGBoost | Comparable, heavier; not benchmarked in this project |
-| **LightGBM** | **Selected** |
-| Neural network | Overkill for ~1K samples |
+| Predict the mean | Baseline: CV R² ≈ 0 |
+| Linear (property features only) | Baseline: CV R² 0.61 |
+| Ridge (all 16 features) | CV R² 0.77; location/neighborhood help, but linear misses non-linearities |
+| Random forest | CV R² 0.82; close to LightGBM |
+| **LightGBM** | **CV R² 0.83; selected** (best of those benchmarked, though its edge over random forest is within noise) |
+| XGBoost | Not benchmarked (expected to be similar to LightGBM) |
+| Neural network | Not tried; overkill for ~1K samples |
+
+Numbers come from `src/05_evaluate_models.py` (5-fold × 3-repeat CV on the 792 development rows; see `reports/model_comparison.md`).
 
 ### Hyperparameters
 
@@ -104,7 +109,7 @@ LIGHTGBM_PARAMS = {
 LIGHTGBM_NUM_ROUNDS = 200
 ```
 
-These are reasonable defaults, not the result of a systematic search, and there is no validation set or early stopping. With only 198 test rows, cross-validation would give a steadier estimate and is listed under future work.
+These started as reasonable defaults. `src/05_evaluate_models.py` then tried a 40-configuration random search (`num_leaves` 4–31, `min_data_in_leaf` 5–50, `learning_rate` 0.02–0.08, feature/bagging fractions, `lambda_l2` 0–20, 100–600 rounds), scored with repeated 5-fold CV on the development rows only. The best configuration reached CV R² 0.837 vs 0.827 for the current one, a difference smaller than the fold-to-fold standard deviation (≈ 0.03), and it scored 0.824 vs 0.826 on the untouched holdout. So the current config was kept. There is still no early stopping.
 
 ---
 
@@ -185,7 +190,7 @@ By mean |SHAP| (test set) the top features are `sqft` (0.35), `is_condo` (0.10),
 ## Future enhancements
 
 **Near term**
-1. k-fold cross-validation and a small hyperparameter search (narrow the train/test gap)
+1. More data or better features, since hyperparameter tuning didn't narrow the train/test gap (cross-validation and a small search are done; see `reports/model_comparison.md`)
 2. Smoothed/shrunk ZIP statistics for sparsely sampled ZIPs
 3. Real flood-zone data (FEMA) in place of the latitude proxy
 4. Prediction intervals via quantile regression
