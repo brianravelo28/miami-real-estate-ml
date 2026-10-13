@@ -4,21 +4,21 @@ REAL ESTATE MODEL - EVALUATION REPORT
 
 METRICS
 ------------------------------------------------------------
-RMSE (log scale): 0.3352
-MAE (log scale): 0.2440
-R² Score: 0.8261
+RMSE (log scale): 0.3418
+MAE (log scale): 0.2466
+R² Score: 0.8191
 
 TOP 10 FEATURES
 ------------------------------------------------------------
-1. sqft: 2027
-2. sqft_log: 336
-3. neighborhood_median_price: 266
-4. baths: 225
-5. dist_beach: 196
-6. neighborhood_price_std: 194
-7. lon: 192
-8. dist_downtown: 184
-9. is_condo: 155
-10. lat: 150
+1. sqft: 1980
+2. sqft_log: 362
+3. baths: 234
+4. lat: 213
+5. neighborhood_price_std: 210
+6. neighborhood_median_price: 204
+7. lon: 183
+8. dist_beach: 175
+9. is_condo: 169
+10. dist_downtown: 156
 
 ============================================================

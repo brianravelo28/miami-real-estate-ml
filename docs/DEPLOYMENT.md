@@ -66,6 +66,9 @@ The `Dockerfile` copies only the files listed above, so it works for any contain
 ### "No such file or directory: models/lightgbm_miami_v1.pkl"
 The pickles weren't pushed. Run `git add -f models/lightgbm_miami_v1.pkl data/X_test.pkl data/y_test.pkl data/feature_artifacts.pkl`, commit, and push. `app.py` resolves paths relative to its own location, so the working directory doesn't matter.
 
+### Python and library versions
+`.python-version` pins the Python version Render uses (it was the then-default 3.14.3 when the app was last known to work). `requirements.txt` only sets minimum versions, so Render installs the newest compatible libraries. The dashboard's sidebar **Environment** panel shows the versions the model was built with vs. what is running, using `models/model_metadata.json` (written by `src/03_train_model.py`). Commit that file together with a regenerated model.
+
 ### Pickle / pandas version errors
 Pickles must be loaded with a compatible pandas version. If you see `ModuleNotFoundError: pandas.core.indexes.numeric`, regenerate the artifacts with the same Python/pandas versions the server uses (`python run_pipeline.py`) and push them again.
 

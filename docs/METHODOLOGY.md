@@ -43,7 +43,7 @@ Mean: 13.19   Std: 0.80   Skewness: 0.41
 
 | Issue | Root cause | Solution |
 |-------|-----------|----------|
-| No coordinates | Dataset only has ZIP codes | Geocode each ZIP to its centroid with `pgeocode`, plus ±0.005° jitter |
+| No coordinates | Dataset only has ZIP codes | Geocode each ZIP to its centroid with `pgeocode`, plus seeded ±0.005° jitter |
 | ZIP prefixes bleed across counties | e.g. `334xx` includes Palm Beach and Monroe | Filter on geocoded county name instead of prefix |
 | Bad ZIP geocodes | e.g. ZIP 33973 labeled Broward but located in Lee County | Bounding-box sanity filter |
 | ZIPs stored as floats | `33446.0` | Normalize to 5-digit strings before geocoding |
@@ -109,7 +109,7 @@ LIGHTGBM_PARAMS = {
 LIGHTGBM_NUM_ROUNDS = 200
 ```
 
-These started as reasonable defaults. `src/05_evaluate_models.py` then tried a 40-configuration random search (`num_leaves` 4–31, `min_data_in_leaf` 5–50, `learning_rate` 0.02–0.08, feature/bagging fractions, `lambda_l2` 0–20, 100–600 rounds), scored with repeated 5-fold CV on the development rows only. The best configuration reached CV R² 0.837 vs 0.827 for the current one, a difference smaller than the fold-to-fold standard deviation (≈ 0.03), and it scored 0.824 vs 0.826 on the untouched holdout. So the current config was kept. There is still no early stopping.
+These started as reasonable defaults. `src/05_evaluate_models.py` then tried a 40-configuration random search (`num_leaves` 4–31, `min_data_in_leaf` 5–50, `learning_rate` 0.02–0.08, feature/bagging fractions, `lambda_l2` 0–20, 100–600 rounds), scored with repeated 5-fold CV on the development rows only. The best configuration reached CV R² 0.837 vs 0.828 for the current one, a difference smaller than the fold-to-fold standard deviation (≈ 0.03), and it scored 0.816 vs 0.819 on the untouched holdout. So the current config was kept. There is still no early stopping.
 
 ---
 
@@ -118,19 +118,19 @@ These started as reasonable defaults. `src/05_evaluate_models.py` then tried a 4
 ### Test-set performance (198 held-out properties)
 
 ```
-RMSE (log scale): 0.3352   (≈ 40% in price terms)
-MAE  (log scale): 0.2440   (≈ 27.6% average price error)
-R² (test):        0.8261
-R² (train):       0.9681
+RMSE (log scale): 0.3418   (≈ 41% in price terms)
+MAE  (log scale): 0.2466   (≈ 28.0% average price error)
+R² (test):        0.8191
+R² (train):       0.9677
 ```
 
 | Target | Goal | Result |
 |--------|------|--------|
-| R² | ≥ 0.80 | 0.826 (met) |
-| RMSE (log) | ≤ 0.20 | 0.335 (not met) |
-| MAE (log) | ≤ 0.18 | 0.244 (not met) |
+| R² | ≥ 0.80 | 0.819 (met) |
+| RMSE (log) | ≤ 0.20 | 0.342 (not met) |
+| MAE (log) | ≤ 0.18 | 0.247 (not met) |
 
-The train/test gap (0.968 vs 0.826) indicates overfitting on 792 training rows. The 10th–90th percentile of test errors spans roughly ×0.70 to ×1.63 of the predicted price, which is what the dashboard reports as its "typical range".
+The train/test gap (0.968 vs 0.819) indicates overfitting on 792 training rows. The 10th–90th percentile of test errors spans roughly ×0.73 to ×1.66 of the predicted price, which is what the dashboard reports as its "typical range".
 
 ### Feature importance
 
@@ -138,18 +138,18 @@ Top features by LightGBM gain:
 
 | Rank | Feature | Gain |
 |------|---------|------|
-| 1 | `sqft` | 2027 |
-| 2 | `sqft_log` | 336 |
-| 3 | `neighborhood_median_price` | 266 |
-| 4 | `baths` | 225 |
-| 5 | `dist_beach` | 196 |
-| 6 | `neighborhood_price_std` | 194 |
-| 7 | `lon` | 192 |
-| 8 | `dist_downtown` | 184 |
-| 9 | `is_condo` | 155 |
-| 10 | `lat` | 150 |
+| 1 | `sqft` | 1980 |
+| 2 | `sqft_log` | 362 |
+| 3 | `baths` | 234 |
+| 4 | `lat` | 213 |
+| 5 | `neighborhood_price_std` | 210 |
+| 6 | `neighborhood_median_price` | 204 |
+| 7 | `lon` | 183 |
+| 8 | `dist_beach` | 175 |
+| 9 | `is_condo` | 169 |
+| 10 | `dist_downtown` | 156 |
 
-By mean |SHAP| (test set) the top features are `sqft` (0.35), `is_condo` (0.10), `lon` (0.09), `dist_downtown` (0.07), and `sqft_log` (0.06). Size dominates, followed by property type and location.
+By mean |SHAP| (test set) the top features are `sqft` (0.35), `is_condo` (0.10), `lon` (0.09), `sqft_log` (0.07), and `dist_downtown` (0.06). Size dominates, followed by property type and location.
 
 ---
 
@@ -162,7 +162,7 @@ By mean |SHAP| (test set) the top features are `sqft` (0.35), `is_condo` (0.10),
 ## Limitations & biases
 
 ### Accuracy
-- Average error is ~28% and the 80% error band is roughly -30% to +63%. Treat predictions as rough estimates.
+- Average error is ~28% and the 80% error band is roughly -27% to +66%. Treat predictions as rough estimates.
 - Train R² (0.97) is far above test R² (0.83): the model overfits the small training set.
 - The test estimate itself is noisy (198 rows, one random split).
 - ZIP-level stats come from ~6 training sales per ZIP on average; four ZIPs have none and use the global fallback.
@@ -171,7 +171,7 @@ By mean |SHAP| (test set) the top features are `sqft` (0.35), `is_condo` (0.10),
 ### Data limitations
 - **Geographic**: Miami-Dade and Broward only
 - **Temporal**: single-year snapshot, no sale dates
-- **Location precision**: ZIP centroids with small jitter, not property addresses
+- **Location precision**: ZIP centroids with small seeded jitter, not property addresses. The particular jitter draw moves test R² by a few hundredths (0.826 vs 0.819 in two runs), about the size of the cross-validation noise.
 - **Missing features**: no HOA fees, taxes, condition, views, or lot size
 - **Small neighborhoods**: ~6 training sales per ZIP on average (4 of 128 ZIPs have none), so ZIP aggregates are noisy
 

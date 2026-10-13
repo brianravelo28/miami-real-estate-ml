@@ -26,10 +26,10 @@ This project demonstrates end-to-end applied ML: data acquisition → feature en
 
 | Metric | Value | Target | Status |
 |--------|-------|--------|--------|
-| **R² Score** | 0.8261 | ≥ 0.80 | ✅ |
-| **RMSE (log scale)** | 0.3352 | ≤ 0.20 | ❌ |
-| **MAE (log scale)** | 0.2440 | ≤ 0.18 | ❌ |
-| **Mean Price Error** | 27.6% | — | — |
+| **R² Score** | 0.8191 | ≥ 0.80 | ✅ |
+| **RMSE (log scale)** | 0.3418 | ≤ 0.20 | ❌ |
+| **MAE (log scale)** | 0.2466 | ≤ 0.18 | ❌ |
+| **Mean Price Error** | 28.0% | — | — |
 
 Evaluated on 198 held-out sales. Training R² is 0.968, so the model overfits somewhat on this small (792-row) training set. An earlier version reported R² = 0.992, but that came from features computed from the sale price (target leakage), which have since been removed (see [Methodology](docs/METHODOLOGY.md)).
 
@@ -41,17 +41,17 @@ A single 198-row split is noisy, so `src/05_evaluate_models.py` compares models 
 |-------|-------------------|------------|
 | Predict the mean | -0.010 ± 0.012 | 0.000 |
 | Linear (property features only) | 0.606 ± 0.041 | 0.544 |
-| Ridge (all 16 features) | 0.766 ± 0.030 | 0.729 |
-| Random forest | 0.818 ± 0.031 | 0.796 |
-| **LightGBM (current config)** | **0.827 ± 0.031** | **0.826** |
-| LightGBM (tuned, 40-config random search) | 0.837 ± 0.029 | 0.824 |
+| Ridge (all 16 features) | 0.766 ± 0.031 | 0.728 |
+| Random forest | 0.818 ± 0.031 | 0.793 |
+| **LightGBM (current config)** | **0.828 ± 0.030** | **0.819** |
+| LightGBM (tuned, 40-config random search) | 0.837 ± 0.030 | 0.816 |
 
 Takeaways: location and neighborhood features lift R² from 0.61 to 0.77 (Ridge), and tree models add roughly another 0.05–0.06. The tuning search found nothing meaningfully better (+0.01 in CV, within noise, and no gain on the holdout), so the current config stays. The train/test gap is not something these hyperparameters fix; more data or better features are the lever. Full details: [`reports/model_comparison.md`](reports/model_comparison.md).
 
 **Top 3 Features** (by model gain):
 1. `sqft` — Property size
 2. `sqft_log` — Log-scaled size (non-linear effects)
-3. `neighborhood_median_price` — Median sale price of training sales in the ZIP
+3. `baths` — Bathroom count (correlated with size)
 
 ---
 
@@ -98,6 +98,12 @@ Then launch the dashboard:
 ```bash
 streamlit run app.py                    # http://localhost:8501
 ```
+
+### Reproducibility
+
+Re-running `python run_pipeline.py` reproduces the committed data, lookups, and model exactly (verified by running it twice and comparing every output). The two sources of randomness are seeded with `RANDOM_STATE` (coordinate jitter in step 1, SHAP sample plots in step 4); LightGBM training is already deterministic here, and the train/test split is seeded.
+
+Library versions are the one thing the repo can't fully lock. `requirements.txt` uses minimum versions, and pickled models are version-sensitive, so step 3 writes `models/model_metadata.json` (Python, LightGBM, pandas, NumPy, scikit-learn versions, seed, metrics). The dashboard's sidebar **Environment** panel compares those against what's actually running, which is the first place to look if model loading ever breaks after a dependency update. `.python-version` pins the Python version used on Render.
 
 ### Run the Tests
 
@@ -278,11 +284,12 @@ Example: "This property is predicted above the baseline mainly because it is lar
 ## 🔬 Model Limitations & Next Steps
 
 ### Current Limitations
-- **Modest accuracy**: ~28% average price error (an 80% error band of roughly -30% to +63%), with a noticeable train/test gap; the dashboard shows this as a wide "typical range" instead of a point estimate alone
+- **Modest accuracy**: ~28% average price error (an 80% error band of roughly -27% to +66%), with a noticeable train/test gap; the dashboard shows this as a wide "typical range" instead of a point estimate alone
 - **Sparse neighborhood stats**: ZIP statistics come from ~6 training sales per ZIP on average (4 ZIPs have none), so they are noisy
 - The dashboard maps the pin to the nearest ZIP centroid in the data to look up those stats
 - Trained only on Miami-Dade & Broward 2026 data; may not generalize to other areas/years
-- Geospatial features use ZIP-code centroids (plus small jitter), not exact property addresses
+- Geospatial features use ZIP-code centroids (plus small seeded jitter), not exact property addresses
+- The jitter draw matters a little: with a different random seed the test R² moves by a few hundredths (0.826 vs 0.819 between two earlier runs), which is the same size as the cross-validation noise
 - No flood risk from FEMA shapefiles (using latitude proxy instead)
 - No macroeconomic features (interest rates, inventory, etc.)
 

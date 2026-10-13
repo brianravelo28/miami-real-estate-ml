@@ -29,6 +29,8 @@ FEATURE_ARTIFACTS_PATH = os.path.join(DATA_DIR, 'feature_artifacts.pkl')
 
 # Model files
 MODEL_PATH = os.path.join(MODELS_DIR, 'lightgbm_miami_v1.pkl')
+# Library versions and settings the model was built with (the dashboard compares against these)
+MODEL_METADATA_PATH = os.path.join(MODELS_DIR, 'model_metadata.json')
 
 # Report files
 SHAP_SUMMARY_PATH = os.path.join(REPORTS_DIR, 'shap_summary.png')

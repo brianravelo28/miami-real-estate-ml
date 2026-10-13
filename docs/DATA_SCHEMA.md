@@ -43,12 +43,12 @@ The model uses exactly the columns in `FEATURE_COLS` (`src/real_estate_config.py
 
 ### Geospatial (5)
 
-Coordinates are **ZIP-code centroids** from `pgeocode` with ±0.005° Gaussian jitter. They are not property addresses.
+Coordinates are **ZIP-code centroids** from `pgeocode` with seeded ±0.005° Gaussian jitter (`features.add_coordinate_jitter`). They are not property addresses.
 
 | Feature | Definition |
 |---------|-----------|
-| `lat` | Latitude (25.28–26.32) |
-| `lon` | Longitude (-80.63 to -80.09) |
+| `lat` | Latitude (25.28–26.33) |
+| `lon` | Longitude (-80.64 to -80.09) |
 | `dist_downtown` | Geodesic miles to downtown Miami (25.7617, -80.1918) |
 | `dist_brickell` | Geodesic miles to Brickell (25.7582, -80.1911) |
 | `dist_beach` | Geodesic miles to Miami Beach (25.7945, -80.1298) |
@@ -99,7 +99,7 @@ How each row gets its values:
 | Std | $956,133 |
 | Min / Max | $65,000 / $9,900,000 |
 
-The model is trained on `log1p(lastSoldPrice)` (mean 13.19, std 0.80). Convert predictions back with `np.expm1`. Errors in log space approximate percentage errors: a log MAE of 0.244 ≈ 27.6%.
+The model is trained on `log1p(lastSoldPrice)` (mean 13.19, std 0.80). Convert predictions back with `np.expm1`. Errors in log space approximate percentage errors: a log MAE of 0.247 ≈ 28.0%.
 
 ---
 
@@ -135,11 +135,11 @@ sqft_log                       7.31       0.45       6.09       8.94
 property_age                   42.4       21.2       -1.0      101.0
 is_condo                       0.38       0.49       0.00       1.00
 is_townhouse                   0.12       0.32       0.00       1.00
-lat                           25.94      0.227      25.28      26.32
-lon                          -80.25      0.106     -80.63     -80.09
-dist_downtown                  18.7       10.4       0.11       43.0
-dist_brickell                  18.9       10.4       0.00       42.9
-dist_beach                     18.9       9.64       0.25       47.3
+lat                           25.94      0.227      25.28      26.33
+lon                          -80.25      0.106     -80.64     -80.09
+dist_downtown                  18.7       10.4       0.09       43.0
+dist_brickell                  18.9       10.4       0.13       42.8
+dist_beach                     18.9       9.67       0.07       47.2
 neighborhood_median_price   643,269    475,684    120,000  4,625,000
 neighborhood_price_std      538,052    615,865          0  4,085,410
 neighborhood_sales_count       7.9        4.8        0.0       24.0

@@ -60,7 +60,8 @@ def generate_force_plots(explainer, shap_values, X_test, num_samples=5):
     logger.info(f"\n--- Generating Force Plot Examples ({num_samples} samples) ---")
     
     # Select random indices
-    indices = np.random.choice(len(X_test), min(num_samples, len(X_test)), replace=False)
+    rng = np.random.default_rng(RANDOM_STATE)
+    indices = rng.choice(len(X_test), min(num_samples, len(X_test)), replace=False)
     
     for idx, sample_idx in enumerate(indices, 1):
         logger.info(f"\nSample {idx} (index {sample_idx}):")

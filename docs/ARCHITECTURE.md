@@ -56,7 +56,7 @@ Kaggle CSV: Florida Real Estate Sold 2026 (10,893 statewide records)
 5. Drop rows whose coordinates fall outside the sanity box `METRO_LAT_BOUNDS` / `METRO_LON_BOUNDS` (catches bad ZIP geocodes, e.g. ZIP 33973 is labeled Broward but sits in Lee County).
 6. Remove outliers: price $50K–$10M, sqft 400–10,000.
 7. Drop rows missing beds, baths, sqft, year built, price, or coordinates.
-8. Add ±0.005° (≈0.35 mi) Gaussian jitter to coordinates so same-ZIP sales don't stack.
+8. Add ±0.005° (≈0.35 mi) **seeded** Gaussian jitter (`features.add_coordinate_jitter`, seed = `RANDOM_STATE`) so same-ZIP sales don't stack and re-runs reproduce the same coordinates.
 9. Add `flood_risk = 'X'` (no FEMA data available).
 
 **Output**: `data/features_engineered.pkl`, 990 records (503 Miami-Dade, 487 Broward) across 128 ZIP codes.
@@ -90,14 +90,14 @@ Test-set results:
 
 | Metric | Value |
 |--------|-------|
-| RMSE (log scale) | 0.3352 |
-| MAE (log scale) | 0.2440 (≈ 27.6% price error) |
-| R² (test) | 0.8261 |
-| R² (train) | 0.9681 |
+| RMSE (log scale) | 0.3418 |
+| MAE (log scale) | 0.2466 (≈ 28.0% price error) |
+| R² (test) | 0.8191 |
+| R² (train) | 0.9677 |
 
-The gap between train and test R² shows some overfitting on the small training set. The 10th–90th percentile of test errors corresponds to roughly ×0.70 to ×1.63 of the predicted price, which the dashboard shows as its "typical range".
+The gap between train and test R² shows some overfitting on the small training set. The 10th–90th percentile of test errors corresponds to roughly ×0.73 to ×1.66 of the predicted price, which the dashboard shows as its "typical range".
 
-Top features by gain: `sqft` (2027), `sqft_log` (336), `neighborhood_median_price` (266), `baths` (225), `dist_beach` (196).
+Top features by gain: `sqft` (1980), `sqft_log` (362), `baths` (234), `lat` (213), `neighborhood_price_std` (210).
 
 **Outputs**: `models/lightgbm_miami_v1.pkl`, `reports/evaluation_report.txt`, `reports/residuals.png`, `reports/actual_vs_predicted.png`.
 
@@ -138,14 +138,17 @@ Deployed on Render's free tier (auto-deploys on push to `main`): https://miami-r
 
 ## Testing
 
-`python -m pytest` (needs `requirements-dev.txt`). 16 tests in `tests/`:
+`python -m pytest` (needs `requirements-dev.txt`). 21 tests in `tests/`:
 
 | File | Covers |
 |------|--------|
 | `tests/test_features.py` | Leakage guards (test-set prices change no feature; training rows never see their own price; neighborhood stats equal hand-computed leave-one-out / training-only values; unseen ZIPs use global fallback), flood percentile equals pandas rank, nearest-ZIP lookup, and **train/serve parity** (`build_feature_row` equals the pipeline's row for the same property). Uses a small synthetic dataset, so it runs in a few seconds with no data files. |
+| `tests/test_reproducibility.py` | Seeded coordinate jitter is deterministic (and doesn't mutate its input), LightGBM training is deterministic, and the saved `model_metadata.json` has the expected fields. |
 | `tests/test_artifacts.py` | The committed model, lookup tables, and train/test pickles: columns match `FEATURE_COLS`, lookups are well formed, an end-to-end prediction is plausible, and re-running the feature step reproduces the saved matrices. Skips if a file is missing (e.g. a fresh clone without Git LFS). |
 
 As a sanity check on the tests themselves, four deliberate bugs were introduced one at a time (test prices leaking into stats, no leave-one-out, a wrong landmark and a different flood percentile in the dashboard path) and each was caught by a failing test. There is no CI yet; tests are run by hand.
+
+**Reproducibility:** `python run_pipeline.py` was run twice end to end and every output (cleaned data, train/test matrices, lookups, model predictions) was identical. Library versions are recorded in `models/model_metadata.json` and shown in the dashboard's Environment panel; see the README.
 
 ## Pipeline robustness
 

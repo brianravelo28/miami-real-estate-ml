@@ -10,6 +10,7 @@ import pickle
 import logging
 import pgeocode
 from real_estate_config import *
+import features
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -75,9 +76,8 @@ def validate_data(df):
         df = df.rename(columns={'year_built': 'yr_built'})
 
     # lat/lon/county already assigned in filter_miami_metro via real ZIP geocoding.
-    # Add small jitter so multiple sales in the same ZIP don't stack exactly on the map.
-    df['lat'] = df['lat'] + np.random.normal(0, 0.005, size=len(df))
-    df['lon'] = df['lon'] + np.random.normal(0, 0.005, size=len(df))
+    # Add small seeded jitter so multiple sales in the same ZIP don't stack exactly on the map.
+    df = features.add_coordinate_jitter(df)
 
     # Add flood_risk if missing (default to 'X' = no risk)
     if 'flood_risk' not in df.columns:

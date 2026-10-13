@@ -6,9 +6,12 @@ Evaluates on test set, saves model artifacts
 
 import pandas as pd
 import numpy as np
+import json
 import pickle
 import logging
+import platform
 import lightgbm as lgb
+import sklearn
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 from real_estate_config import *
@@ -190,6 +193,25 @@ def save_evaluation_report(rmse, mae, r2, top_features):
     
     logger.info(f"✓ Saved evaluation report to {report_path}")
 
+def save_run_metadata(X_train, X_test, rmse, mae, r2):
+    """Record the environment and settings so version drift is visible later"""
+    metadata = {
+        'python': platform.python_version(),
+        'lightgbm': lgb.__version__,
+        'pandas': pd.__version__,
+        'numpy': np.__version__,
+        'scikit_learn': sklearn.__version__,
+        'random_state': RANDOM_STATE,
+        'n_train': int(len(X_train)),
+        'n_test': int(len(X_test)),
+        'n_features': int(X_train.shape[1]),
+        'features': list(X_train.columns),
+        'metrics': {'r2': round(float(r2), 4), 'mae_log': round(float(mae), 4), 'rmse_log': round(float(rmse), 4)},
+    }
+    with open(MODEL_METADATA_PATH, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2)
+    logger.info(f"✓ Saved model metadata to {MODEL_METADATA_PATH}")
+
 def main():
     logger.info("="*60)
     logger.info("STEP 3: TRAIN MODEL")
@@ -214,6 +236,7 @@ def main():
     # Save
     save_model(model)
     save_evaluation_report(rmse, mae, r2, top_features)
+    save_run_metadata(X_train, X_test, rmse, mae, r2)
     
     logger.info("\n" + "="*60)
     logger.info("✓ Step 3 Complete. Ready for SHAP analysis.")

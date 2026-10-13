@@ -6,9 +6,13 @@ Interactive ML dashboard with SHAP explanations
 import streamlit as st
 import pandas as pd
 import numpy as np
+import json
 import pickle
 import os
+import platform
 import sys
+import lightgbm
+import sklearn
 import shap
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -120,6 +124,25 @@ with st.sidebar:
     """)
     st.markdown("### 🧩 Features")
     st.selectbox("Features", FEATURE_NAMES, label_visibility="collapsed")
+
+    # Which library versions built the model vs which are running (pickles are version-sensitive)
+    with st.expander("⚙️ Environment"):
+        try:
+            with open(os.path.join(APP_DIR, 'models', 'model_metadata.json'), encoding='utf-8') as f:
+                built = json.load(f)
+        except Exception:
+            built = None
+        running = {
+            'python': platform.python_version(), 'lightgbm': lightgbm.__version__,
+            'pandas': pd.__version__, 'numpy': np.__version__, 'scikit_learn': sklearn.__version__,
+        }
+        if built is None:
+            st.caption("No model metadata found.")
+        else:
+            for name, now in running.items():
+                then = built.get(name, '?')
+                same = then.split('.')[:2] == now.split('.')[:2]
+                st.caption(f"{name}: built {then} · running {now}" + ("" if same else "  ⚠ differs"))
 
 # ============================================================================
 # TAB 1: SEARCH & PREDICT

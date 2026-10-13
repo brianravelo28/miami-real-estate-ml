@@ -25,6 +25,7 @@ from real_estate_config import (
 logger = logging.getLogger(__name__)
 
 FLOOD_LAT_CUTOFF = 25.8
+JITTER_DEGREES = 0.005  # ~0.35 miles of Gaussian noise on ZIP-centroid coordinates
 NEIGHBORHOOD_COLS = ['neighborhood_median_price', 'neighborhood_price_std', 'neighborhood_sales_count']
 
 
@@ -43,6 +44,18 @@ def engineer_property_features(df):
     df['is_condo'] = (df[prop_type_col].str.lower() == 'condo').astype(int)
     df['is_townhouse'] = (df[prop_type_col].str.lower() == 'townhouse').astype(int)
     logger.info("✓ sqft_log, property_age, is_condo, is_townhouse")
+    return df
+
+
+def add_coordinate_jitter(df, scale=JITTER_DEGREES, seed=RANDOM_STATE):
+    """
+    Add small seeded Gaussian noise to lat/lon so sales in the same ZIP don't stack on the map.
+    Seeded so re-running the pipeline reproduces the same coordinates (and therefore the same model).
+    """
+    rng = np.random.default_rng(seed)
+    df = df.copy()
+    df['lat'] = df['lat'] + rng.normal(0, scale, size=len(df))
+    df['lon'] = df['lon'] + rng.normal(0, scale, size=len(df))
     return df
 
 
