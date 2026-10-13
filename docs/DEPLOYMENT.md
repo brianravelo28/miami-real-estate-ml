@@ -67,7 +67,25 @@ The `Dockerfile` copies only the files listed above, so it works for any contain
 The pickles weren't pushed. Run `git add -f models/lightgbm_miami_v1.pkl data/X_test.pkl data/y_test.pkl data/feature_artifacts.pkl`, commit, and push. `app.py` resolves paths relative to its own location, so the working directory doesn't matter.
 
 ### Python and library versions
-`.python-version` pins the Python version Render uses (it was the then-default 3.14.3 when the app was last known to work). `requirements.txt` only sets minimum versions, so Render installs the newest compatible libraries. The dashboard's sidebar **Environment** panel shows the versions the model was built with vs. what is running, using `models/model_metadata.json` (written by `src/03_train_model.py`). Commit that file together with a regenerated model.
+`.python-version` pins the Python version Render uses. `requirements.txt` gives every package a minimum version **and a cap at the next major version** (for example `pandas>=2.0.0,<4`), so a surprise major release can't silently break the pickled model or the dashboard on the next deploy, while minor and patch updates still flow in. A test (`tests/test_requirements.py`) enforces that every package keeps both bounds.
+
+**Known-good versions** (what Render installed and ran successfully on 2026-10-13, read from the build log and the dashboard's Environment panel):
+
+| Package | Render ran | Model was built with (local) |
+|---------|-----------|------------------------------|
+| Python | 3.14.3 | 3.9.13 |
+| pandas | 3.0.6 | 2.0.3 |
+| numpy | 2.5.4 | 1.24.3 |
+| scikit-learn | 1.9.1 | 1.3.0 |
+| LightGBM | 4.7.0 | 4.6.0 |
+| SHAP | 0.53.0 | 0.49.1 |
+| Streamlit | 1.65.0 | 1.50.0 |
+
+The model gives identical predictions on both sets (checked with the default input: $607,572, range $443,187–$1,005,645), even across pandas 2→3 and numpy 1→2. If a future deploy misbehaves, the table above is the set to fall back to.
+
+The dashboard's sidebar **Environment** panel shows the deployed commit (from Render's `RENDER_GIT_COMMIT`) and, for each library, the version the model was built with → the version running now, flagging only major-version differences. `models/model_metadata.json` (written by `src/03_train_model.py`) holds the build-time versions; commit it together with a regenerated model.
+
+**Stale deploys:** once a deploy sat for 10 minutes and then reported live while the old version kept serving. **Manual Deploy → Clear build cache & deploy latest commit** fixed it (the redeploy took about 90 seconds). The deployed-commit line in the Environment panel makes this easy to spot.
 
 ### Pickle / pandas version errors
 Pickles must be loaded with a compatible pandas version. If you see `ModuleNotFoundError: pandas.core.indexes.numeric`, regenerate the artifacts with the same Python/pandas versions the server uses (`python run_pipeline.py`) and push them again.

@@ -136,13 +136,17 @@ with st.sidebar:
             'python': platform.python_version(), 'lightgbm': lightgbm.__version__,
             'pandas': pd.__version__, 'numpy': np.__version__, 'scikit_learn': sklearn.__version__,
         }
+        commit = os.environ.get('RENDER_GIT_COMMIT')
+        st.caption(f"deployed commit: {commit[:7] if commit else 'not on Render (local run)'}")
         if built is None:
             st.caption("No model metadata found.")
         else:
+            st.caption("Library versions: built with → running now")
             for name, now in running.items():
                 then = built.get(name, '?')
-                same = then.split('.')[:2] == now.split('.')[:2]
-                st.caption(f"{name}: built {then} · running {now}" + ("" if same else "  ⚠ differs"))
+                # Only a major-version change is worth flagging; minor/patch bumps are routine.
+                major_changed = then.split('.')[0] != now.split('.')[0]
+                st.caption(f"{name}: {then} → {now}" + ("  (major version differs)" if major_changed else ""))
 
 # ============================================================================
 # TAB 1: SEARCH & PREDICT

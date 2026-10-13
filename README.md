@@ -103,7 +103,7 @@ streamlit run app.py                    # http://localhost:8501
 
 Re-running `python run_pipeline.py` reproduces the committed data, lookups, and model exactly (verified by running it twice and comparing every output). The two sources of randomness are seeded with `RANDOM_STATE` (coordinate jitter in step 1, SHAP sample plots in step 4); LightGBM training is already deterministic here, and the train/test split is seeded.
 
-Library versions are the one thing the repo can't fully lock. `requirements.txt` uses minimum versions, and pickled models are version-sensitive, so step 3 writes `models/model_metadata.json` (Python, LightGBM, pandas, NumPy, scikit-learn versions, seed, metrics). The dashboard's sidebar **Environment** panel compares those against what's actually running, which is the first place to look if model loading ever breaks after a dependency update. `.python-version` pins the Python version used on Render.
+Library versions are the one thing a pickled model is sensitive to. `requirements.txt` sets a minimum version and a cap at the next major version for every package, `.python-version` pins Python for Render, and step 3 writes `models/model_metadata.json` (Python, LightGBM, pandas, NumPy, scikit-learn versions, seed, metrics). The dashboard's sidebar **Environment** panel shows the deployed commit and compares those build-time versions against what's running, flagging major-version changes; [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) lists the known-good set.
 
 ### Run the Tests
 
