@@ -12,7 +12,6 @@ Outputs: console table + reports/model_comparison.md
 This script does not change the saved model or the config.
 """
 
-import importlib.util
 import logging
 import os
 import sys
@@ -31,6 +30,7 @@ from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from real_estate_config import *  # noqa: E402,F401,F403
+import features as fe  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -42,17 +42,7 @@ SEARCH_SEED = 7
 PROPERTY_COLS = ['sqft_log', 'beds', 'baths', 'property_age', 'is_condo', 'is_townhouse']
 
 
-def load_feature_module():
-    """Import 02_engineer_features.py (its filename starts with a digit)"""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '02_engineer_features.py')
-    spec = importlib.util.spec_from_file_location('engineer_features', path)
-    module = importlib.util.module_from_spec(spec)
-    logging.disable(logging.INFO)  # silence its step logging while importing/using it
-    spec.loader.exec_module(module)
-    return module
-
-
-def build_frames(fe):
+def build_frames():
     """Cleaned data -> row-level features that don't depend on any price statistic"""
     df = pickle_load(FEATURES_PATH)
     df = fe.engineer_property_features(df)
@@ -67,7 +57,7 @@ def pickle_load(path):
         return pickle.load(f)
 
 
-def make_fold(fe, train_df, valid_df):
+def make_fold(train_df, valid_df):
     """Leakage-free matrices for one train/valid pair"""
     tr, va, _, _ = fe.add_neighborhood_features(train_df.copy(), valid_df.copy())
     X_tr, y_tr = fe.make_xy(tr)
@@ -142,8 +132,8 @@ def fmt(res, key):
 
 def main():
     t0 = time.time()
-    fe = load_feature_module()
-    df = build_frames(fe)
+    logging.disable(logging.INFO)  # silence the feature code's step logging
+    df = build_frames()
 
     dev_df, holdout_df = fe.split_data(df)
     logging.disable(logging.NOTSET)
@@ -158,8 +148,8 @@ def main():
     splitter = RepeatedKFold(n_splits=CV_FOLDS, n_repeats=CV_REPEATS, random_state=RANDOM_STATE)
     folds = []
     for tr_idx, va_idx in splitter.split(dev_df):
-        folds.append(make_fold(fe, dev_df.iloc[tr_idx], dev_df.iloc[va_idx]))
-    holdout_fold = make_fold(fe, dev_df, holdout_df)  # ZIP stats from all development rows
+        folds.append(make_fold(dev_df.iloc[tr_idx], dev_df.iloc[va_idx]))
+    holdout_fold = make_fold(dev_df, holdout_df)  # ZIP stats from all development rows
     logging.disable(logging.NOTSET)
 
     default_rounds = LIGHTGBM_NUM_ROUNDS

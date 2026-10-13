@@ -61,7 +61,9 @@ Kaggle CSV: Florida Real Estate Sold 2026 (10,893 statewide records)
 
 **Output**: `data/features_engineered.pkl`, 990 records (503 Miami-Dade, 487 Broward) across 128 ZIP codes.
 
-### 2. Feature engineering (`src/02_engineer_features.py`)
+### 2. Feature engineering (`src/02_engineer_features.py`, logic in `src/features.py`)
+
+All feature code lives in `src/features.py`, which both this step and the dashboard (`app.py`) import, so the model is never asked to predict on features built a different way than it was trained on. `02_engineer_features.py` is a thin script that loads step 1's output, calls `features.build_datasets()`, and saves the results. `tests/` verifies the shared code (see Testing below).
 
 Builds the 16 modeling features listed in `FEATURE_COLS` (see [DATA_SCHEMA.md](DATA_SCHEMA.md)):
 
@@ -115,7 +117,7 @@ Streamlit app. On startup it loads the model and test split and computes SHAP va
 - Inputs: beds, baths, sqft, property age, property type.
 - Location: a crosshair fixed at the center of a Folium map; panning the map sets the point. The crosshair is red when the map is at zoom ≥ 10 and centered within the Miami-Dade/Broward bounding box, gray otherwise.
 - Output: predicted price, a "typical range" (10th–90th percentile of the model's test errors), and a SHAP bar chart of the top 10 features for that prediction.
-- Neighborhood features are looked up from the nearest ZIP centroid in `feature_artifacts.pkl` (the same training-only stats the model saw); distances and the flood percentile are computed from the pin the same way as in training.
+- Neighborhood features are looked up from the nearest ZIP centroid in `feature_artifacts.pkl` (the same training-only stats the model saw); the whole feature row is built by `features.build_feature_row()`, the same code path as training (distances, flood percentile, column order).
 
 **Tab 2: Neighborhood Map**
 - Folium map of 100 sampled test properties, colored by predicted price.
@@ -133,6 +135,17 @@ All Plotly charts carry a drag-to-zoom / double-click-to-reset hint.
 Deployed on Render's free tier (auto-deploys on push to `main`): https://miami-real-estate-ml.onrender.com/. The app needs only `app.py`, the model pickle, and `data/X_test.pkl` / `y_test.pkl`. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
+
+## Testing
+
+`python -m pytest` (needs `requirements-dev.txt`). 16 tests in `tests/`:
+
+| File | Covers |
+|------|--------|
+| `tests/test_features.py` | Leakage guards (test-set prices change no feature; training rows never see their own price; neighborhood stats equal hand-computed leave-one-out / training-only values; unseen ZIPs use global fallback), flood percentile equals pandas rank, nearest-ZIP lookup, and **train/serve parity** (`build_feature_row` equals the pipeline's row for the same property). Uses a small synthetic dataset, so it runs in a few seconds with no data files. |
+| `tests/test_artifacts.py` | The committed model, lookup tables, and train/test pickles: columns match `FEATURE_COLS`, lookups are well formed, an end-to-end prediction is plausible, and re-running the feature step reproduces the saved matrices. Skips if a file is missing (e.g. a fresh clone without Git LFS). |
+
+As a sanity check on the tests themselves, four deliberate bugs were introduced one at a time (test prices leaking into stats, no leave-one-out, a wrong landmark and a different flood percentile in the dashboard path) and each was caught by a failing test. There is no CI yet; tests are run by hand.
 
 ## Pipeline robustness
 

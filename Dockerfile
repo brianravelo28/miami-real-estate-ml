@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # The dashboard only needs the app, trained model, and test split
 COPY app.py .
+COPY src/features.py src/real_estate_config.py src/
 COPY .streamlit/ .streamlit/
 COPY data/X_test.pkl data/
 COPY data/y_test.pkl data/

@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import os
+import sys
 import shap
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -17,6 +18,8 @@ from streamlit_folium import st_folium
 import streamlit.components.v1 as components
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(APP_DIR, 'src'))
+import features as feature_code  # shared with the training pipeline (src/features.py)
 
 # Set page config
 st.set_page_config(
@@ -262,43 +265,17 @@ with tab1:
     else:
         st.markdown(f"**Pin location**: zoom in closer to register a pin (current zoom: {zoom})")
 
-    # Compute distances (simplified)
-    from geopy.distance import geodesic
-    downtown_miami = (25.7617, -80.1918)
-    brickell = (25.7582, -80.1911)
-    miami_beach = (25.7945, -80.1298)
-
-    dist_downtown = geodesic((lat, lon), downtown_miami).miles
-    dist_brickell = geodesic((lat, lon), brickell).miles
-    dist_beach = geodesic((lat, lon), miami_beach).miles
-
     # Prediction button
     if st.button("🔮 Predict Price", use_container_width=True):
-        # Neighborhood features come from the nearest ZIP in the training data
-        # (same train-only stats the model was trained and tested with)
-        lon_scale = np.cos(np.radians(lat))
-        zip_dist = np.hypot(ZIP_TABLE['lat'] - lat, (ZIP_TABLE['lon'] - lon) * lon_scale)
-        nearest_zip = zip_dist.idxmin()
+        # Build the feature row with the same code the training pipeline uses
+        # (src/features.py). Neighborhood stats come from the nearest ZIP in the training data.
+        nearest_zip = feature_code.nearest_zip(ZIP_TABLE, lat, lon)
         zip_row = ZIP_TABLE.loc[nearest_zip]
-
-        # Flood proxy percentile, ranked the same way as in training (average rank for ties)
-        proxy = max(25.8 - lat, 0.0)
-        n_ref = len(FLOOD_PROXY_SORTED)
-        below = np.searchsorted(FLOOD_PROXY_SORTED, proxy, side='left')
-        at_or_below = np.searchsorted(FLOOD_PROXY_SORTED, proxy, side='right')
-        flood_risk_percentile = ((below + 1 + at_or_below) / 2) / n_ref
-
-        row = {
-            'beds': beds, 'baths': baths, 'sqft': sqft, 'sqft_log': np.log1p(sqft),
-            'property_age': property_age, 'is_condo': is_condo_val, 'is_townhouse': is_townhouse_val,
-            'lat': lat, 'lon': lon,
-            'dist_downtown': dist_downtown, 'dist_brickell': dist_brickell, 'dist_beach': dist_beach,
-            'neighborhood_median_price': zip_row['median'],
-            'neighborhood_price_std': zip_row['std'],
-            'neighborhood_sales_count': zip_row['count'],
-            'flood_risk_percentile': flood_risk_percentile,
-        }
-        features = pd.DataFrame([row])[FEATURE_NAMES]
+        features = feature_code.build_feature_row(
+            beds, baths, sqft, property_age, is_condo_val, is_townhouse_val,
+            lat, lon, zip_row, FLOOD_PROXY_SORTED,
+        )[FEATURE_NAMES]
+        dist_downtown = features.loc[0, 'dist_downtown']
 
         # Predict
         y_pred_log = model.predict(features)[0]

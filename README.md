@@ -99,6 +99,18 @@ Then launch the dashboard:
 streamlit run app.py                    # http://localhost:8501
 ```
 
+### Run the Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite (`tests/`) checks the things that went wrong earlier in this project:
+- **No target leakage**: changing a test-set sale price changes no feature; a training row never sees its own price (leave-one-out); price-derived features can't be added back to `FEATURE_COLS`.
+- **Train/serve parity**: the dashboard's single-row feature builder returns exactly what the training pipeline produces for the same property.
+- **Saved files**: the committed model, lookups, and train/test matrices load, match the feature list, predict sensibly, and are reproducible from step 1's output (these skip if a file is missing).
+
 ---
 
 ## 📁 Project Structure
@@ -109,17 +121,21 @@ miami-real-estate-ml/
 ├── LICENSE                            # MIT license
 ├── app.py                             # Streamlit dashboard (entry point)
 ├── requirements.txt                   # Python dependencies
+├── requirements-dev.txt               # Adds pytest for the test suite
 ├── render.yaml, Dockerfile            # Deployment config
 ├── .gitignore                         # Git ignore rules
 ├── run_pipeline.py                    # Master executor
 │
 ├── src/
 │   ├── 01_load_data.py                # Step 1: Load, geocode & validate data
-│   ├── 02_engineer_features.py        # Step 2: Feature engineering
+│   ├── features.py                    # Feature code shared by the pipeline AND the dashboard
+│   ├── 02_engineer_features.py        # Step 2: Feature engineering (thin script around features.py)
 │   ├── 03_train_model.py              # Step 3: Train LightGBM
 │   ├── 04_shap_analysis.py            # Step 4: SHAP explanations
 │   ├── 05_evaluate_models.py          # Step 5 (optional): CV, baselines, hyperparameter search
 │   └── real_estate_config.py          # Single source of truth (paths, params)
+│
+├── tests/                             # pytest suite (leakage guards, train/serve parity)
 │
 ├── data/
 │   ├── acquisition.md                 # How to download dataset
