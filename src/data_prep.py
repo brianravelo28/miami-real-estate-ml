@@ -11,7 +11,6 @@ import logging
 import numpy as np
 import pandas as pd
 
-import features
 from real_estate_config import (
     MAX_PRICE, MAX_SQFT, METRO_LAT_BOUNDS, METRO_LON_BOUNDS, MIN_PRICE, MIN_SQFT, TARGET_COUNTIES,
 )
@@ -74,15 +73,9 @@ def filter_miami_metro(df, geocoder=geocode_zips):
 
 
 def clean_sales(df):
-    """Rename, jitter coordinates, drop price/size outliers and rows missing critical fields"""
+    """Rename year_built, drop price/size outliers and rows missing critical fields"""
     if 'year_built' in df.columns and 'yr_built' not in df.columns:
         df = df.rename(columns={'year_built': 'yr_built'})
-
-    # Seeded jitter so same-ZIP sales don't stack exactly on the map
-    df = features.add_coordinate_jitter(df)
-
-    if 'flood_risk' not in df.columns:
-        df['flood_risk'] = 'X'
 
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:

@@ -1,587 +1,229 @@
 """
-Miami Real Estate Price Predictor - Streamlit Dashboard
-Interactive ML dashboard with SHAP explanations
+Miami Real Estate Market Explorer - Streamlit dashboard
+A descriptive look at ~1,000 Miami-Dade and Broward home sales. No model, no predictions.
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import json
-import pickle
 import os
-import platform
 import sys
-import lightgbm
-import sklearn
-import shap
-import plotly.graph_objects as go
+
 import folium
+import pandas as pd
+import plotly.express as px
+import streamlit as st
 from streamlit_folium import st_folium
-import streamlit.components.v1 as components
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(APP_DIR, 'src'))
-import features as feature_code  # shared with the training pipeline (src/features.py)
-import real_estate_config as cfg
+import real_estate_config as cfg  # noqa: E402
+import summaries  # noqa: E402
 
-# Set page config
-st.set_page_config(
-    page_title="Miami Real Estate Predictor",
-    page_icon="🏠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ============================================================================
-# LOAD DATA & MODEL (cached for performance)
-# ============================================================================
-
-@st.cache_resource
-def load_artifacts():
-    """Load model, data, and SHAP values"""
-    model = pickle.load(open(os.path.join(APP_DIR, 'models', 'lightgbm_miami_v1.pkl'), 'rb'))
-    X_test = pickle.load(open(os.path.join(APP_DIR, 'data', 'X_test.pkl'), 'rb'))
-    y_test = pickle.load(open(os.path.join(APP_DIR, 'data', 'y_test.pkl'), 'rb'))
-    lookups = pickle.load(open(os.path.join(APP_DIR, 'data', 'feature_artifacts.pkl'), 'rb'))
-
-    # Compute SHAP values once (cached)
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_test)
-
-    return model, X_test, y_test, explainer, shap_values, lookups
-
-@st.cache_data
-def load_model_metadata():
-    """Settings and library versions the model was built with (written by step 3)"""
-    try:
-        with open(os.path.join(APP_DIR, 'models', 'model_metadata.json'), encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def money(value):
-    """$9.9M / $65K, escaped so Streamlit doesn't read $...$ as math"""
-    return f"\\${value / 1e6:.1f}M" if value >= 1e6 else f"\\${value / 1e3:.0f}K"
-
-
-# ============================================================================
-# STREAMLIT APP
-# ============================================================================
+st.set_page_config(page_title="Miami Real Estate Explorer", page_icon="🏠", layout="wide")
 
 st.markdown("""
 <style>
 html, body, p, span, li, label, input, textarea, select, button, div[class*="css"] {
     font-size: 17px !important;
 }
-small, [data-testid="stCaptionContainer"], [data-testid="stMetricLabel"], [data-testid="stMetricDelta"] {
+small, [data-testid="stCaptionContainer"], [data-testid="stMetricLabel"] {
     font-size: 15px !important;
-}
-section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
-    background-color: rgba(28, 131, 225, 0.1) !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("# 🏠 Miami Real Estate Price Predictor")
-st.markdown("AI-powered price estimation with applicable predictions (SHAP)")
+CHART_HINT = "💡 Drag to zoom • Double-click to reset"
+TYPE_ORDER = ['Single family', 'Condo', 'Townhome', 'Other']
+TYPE_COLORS = {'Single family': '#1f77b4', 'Condo': '#ff7f0e', 'Townhome': '#2ca02c', 'Other': '#7f7f7f'}
 
-# Load artifacts
+
+def money(value):
+    """$9.9M / $65K (st.metric values are plain text, so no $ escaping is needed)"""
+    if pd.isna(value):
+        return "n/a"
+    return f"${value / 1e6:.2f}M" if value >= 1e6 else f"${value / 1e3:,.0f}K"
+
+
+@st.cache_data
+def load_sales():
+    df = pd.read_csv(cfg.CLEAN_DATA_PATH, dtype={'zip': str})
+    return summaries.prepare(df)
+
+
 try:
-    model, X_test, y_test, explainer, shap_values, lookups = load_artifacts()
-    st.success("✓ Model and data loaded")
-except Exception as e:
-    st.error(f"Error loading model: {e}")
+    sales = load_sales()
+except Exception as e:  # missing file on a fresh clone, etc.
+    st.error(f"Could not load {os.path.basename(cfg.CLEAN_DATA_PATH)}: {e}\n\n"
+             "Run `python run_pipeline.py` (needs the Kaggle CSV in data/).")
     st.stop()
 
-FEATURE_NAMES = list(X_test.columns)
-ZIP_TABLE = lookups['zip_table']
-FLOOD_PROXY_SORTED = lookups['flood_proxy_sorted']
-
 # ============================================================================
-# SIDEBAR - MODEL INFO
+# SIDEBAR FILTERS (apply to every tab)
 # ============================================================================
 
 with st.sidebar:
-    st.markdown("## 📊 Model Performance")
+    st.markdown("## Filters")
+    counties = st.multiselect("County", sorted(sales['county_name'].unique()),
+                              default=sorted(sales['county_name'].unique()))
+    types = st.multiselect("Property type", TYPE_ORDER, default=TYPE_ORDER)
+    lo, hi = int(sales['lastSoldPrice'].min()), int(sales['lastSoldPrice'].max())
+    price_range = st.slider("Sale price", lo, hi, (lo, hi), step=25_000, format="$%d")
+    st.caption(f"Data: {len(sales):,} closed sales in 2026 (Kaggle), "
+               f"{sales['zip'].nunique()} ZIP codes. Filters apply to all tabs.")
 
-    # Calculate metrics
-    y_pred = model.predict(X_test)
-    from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+view = sales[sales['county_name'].isin(counties)
+             & sales['property_type'].isin(types)
+             & sales['lastSoldPrice'].between(*price_range)]
 
-    r2 = r2_score(y_test, y_pred)
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    pct_error = (np.exp(mae) - 1) * 100
-    r2_note = "meets 0.80 target" if r2 >= 0.80 else "-below 0.80 target"
+st.markdown("# 🏠 Miami Real Estate Market Explorer")
+st.markdown("What ~1,000 recent Miami-Dade and Broward home sales show. "
+            "This is a description of past sales, not a price estimator.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("R² Score", f"{r2:.4f}", r2_note)
-        st.metric("RMSE", f"{rmse:.4f}", "log scale")
-    with col2:
-        st.metric("MAE", f"{mae:.4f}", f"{pct_error:.1f}%")
-        st.metric("Samples", f"{len(X_test)}")
+if view.empty:
+    st.warning("No sales match these filters.")
+    st.stop()
 
-    st.markdown("---")
-    st.markdown("### 📈 Dataset Info")
-    meta = load_model_metadata() or {}
-    records = (f"{meta['n_records']:,} Miami-Dade & Broward properties"
-               if 'n_records' in meta else "Miami-Dade & Broward properties")
-    price_range = (f"{money(meta['price_min'])}–{money(meta['price_max'])}"
-                   if 'price_min' in meta and 'price_max' in meta else "n/a")
-    st.info(f"""
-    **Records:**
-
-    {records}
-
-    **Date**: {cfg.REFERENCE_YEAR}
-
-    **Price Range:**
-
-    {price_range}
-    """)
-    st.markdown("### 🧩 Features")
-    st.selectbox("Features", FEATURE_NAMES, label_visibility="collapsed")
-
-    # Which library versions built the model vs which are running (pickles are version-sensitive)
-    with st.expander("⚙️ Environment"):
-        built = load_model_metadata()
-        running = {
-            'python': platform.python_version(), 'lightgbm': lightgbm.__version__,
-            'pandas': pd.__version__, 'numpy': np.__version__, 'scikit_learn': sklearn.__version__,
-        }
-        commit = os.environ.get('RENDER_GIT_COMMIT')
-        st.caption(f"deployed commit: {commit[:7] if commit else 'not on Render (local run)'}")
-        if built is None:
-            st.caption("No model metadata found.")
-        else:
-            st.caption("Library versions: built with → running now")
-            for name, now in running.items():
-                then = built.get(name, '?')
-                # Only a major-version change is worth flagging; minor/patch bumps are routine.
-                major_changed = then.split('.')[0] != now.split('.')[0]
-                st.caption(f"{name}: {then} → {now}" + ("  (major version differs)" if major_changed else ""))
+tab_overview, tab_map, tab_drivers, tab_zip, tab_about = st.tabs(
+    ["📊 Overview", "🗺️ Map by ZIP", "🔎 What goes with price", "📋 ZIP table", "ℹ️ About the data"])
 
 # ============================================================================
-# TAB 1: SEARCH & PREDICT
+# OVERVIEW
 # ============================================================================
 
-tab1, tab2, tab3 = st.tabs(["🔍 Search & Predict", "🗺️ Neighborhood Map", "📈 Diagnostics"])
+with tab_overview:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sales", f"{len(view):,}")
+    c2.metric("Median price", money(view['lastSoldPrice'].median()))
+    c3.metric("Median $/sqft", f"${view['price_per_sqft'].median():,.0f}")
+    c4.metric("Median size", f"{view['sqft'].median():,.0f} sqft")
 
-with tab1:
-    st.markdown("## Enter Property Details")
+    st.markdown("### Price distribution by property type")
+    fig = px.box(view, x='property_type', y='lastSoldPrice', color='property_type', points='outliers',
+                 category_orders={'property_type': TYPE_ORDER}, color_discrete_map=TYPE_COLORS, log_y=True,
+                 labels={'property_type': '', 'lastSoldPrice': 'Sale price (log scale)'})
+    fig.update_layout(showlegend=False, height=420, font=dict(size=15))
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Box = middle 50% of sales, line = median. {CHART_HINT}")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        beds = st.number_input("Bedrooms", min_value=0, max_value=10, value=3)
-        baths = st.number_input("Bathrooms", min_value=0, max_value=8, value=2)
+    st.markdown("### Counties and property types")
+    left, right = st.columns(2)
+    by_county = summaries.summarize(view, 'county_name').rename(columns={'county_name': 'County'})
+    by_type = summaries.summarize(view, 'property_type').rename(columns={'property_type': 'Type'})
+    cols = {'sales': 'Sales', 'median_price': 'Median price', 'median_price_per_sqft': 'Median $/sqft',
+            'median_sqft': 'Median sqft'}
+    fmt = {'Median price': '${:,.0f}', 'Median $/sqft': '${:,.0f}', 'Median sqft': '{:,.0f}'}
+    left.dataframe(by_county.rename(columns=cols).style.format(fmt), hide_index=True, use_container_width=True)
+    right.dataframe(by_type.rename(columns=cols).style.format(fmt), hide_index=True, use_container_width=True)
 
-    with col2:
-        sqft = st.number_input("Square Feet", min_value=400, max_value=10000, value=1500)
-        property_age = st.number_input("Property Age (years)", min_value=0, max_value=170, value=30)
+# ============================================================================
+# MAP
+# ============================================================================
 
-    with col3:
-        is_condo = st.selectbox("Property Type", ["Single Family", "Condo", "Townhouse"])
-        is_condo_val = 1 if is_condo == "Condo" else 0
-        is_townhouse_val = 1 if is_condo == "Townhouse" else 0
+with tab_map:
+    st.markdown("### Median sale price by ZIP code")
+    zips = summaries.zip_summary(view)
+    show_thin = st.checkbox(f"Also show ZIPs with fewer than {cfg.MIN_ZIP_SALES} sales (shaded grey)", value=False)
+    shown = zips if show_thin else zips[~zips['thin']]
 
-    # Location
-    st.markdown("### Location")
-    st.markdown("Pan and zoom the map until the crosshair turns red")
+    m = folium.Map(location=[25.85, -80.28], zoom_start=10, tiles='OpenStreetMap')
+    if len(shown):
+        pct = shown['median_price'].rank(pct=True)  # rank-based, so a few $5M ZIPs don't wash out the rest
+        for i, r in shown.iterrows():
+            ratio = pct[i]
+            color = '#9e9e9e' if r['thin'] else f'hsl({(1 - ratio) * 120}, 85%, 45%)'
+            folium.CircleMarker(
+                location=[r['lat'], r['lon']],
+                radius=4 + 2 * min(r['sales'], 25) ** 0.5,
+                popup=folium.Popup(
+                    f"<b>ZIP {r['zip']}</b> ({r['county']})<br>{int(r['sales'])} sales<br>"
+                    f"Median ${r['median_price']:,.0f}<br>${r['median_price_per_sqft']:,.0f}/sqft"
+                    + ("<br><i>too few sales to trust</i>" if r['thin'] else ""), max_width=240),
+                color=color, fill=True, fill_color=color, fill_opacity=0.65, weight=1.5,
+            ).add_to(m)
+    st_folium(m, width=700, height=520, key="zip_map", returned_objects=[])
+    st.caption("One circle per ZIP, placed at the ZIP's center (the data has no street addresses). "
+               "Size = number of sales; color runs green (lower median) to red (higher median) by rank among the ZIPs shown. "
+               "Click a circle for details.")
+    st.info(f"{len(zips)} ZIPs have sales under the current filters; {int(zips['thin'].sum())} of them have fewer "
+            f"than {cfg.MIN_ZIP_SALES}. A median of 2 or 3 sales mostly reflects which houses happened to sell.")
 
-    PIN_ZOOM_THRESHOLD = 10
-    MAP_HEIGHT = 350
-    # Approximate Miami-Dade + Broward coverage area (matches the sanity bounding box
-    # used to filter training data in src/real_estate_config.py)
-    METRO_LAT_BOUNDS = (25.10, 26.50)
-    METRO_LON_BOUNDS = (-80.95, -79.90)
+# ============================================================================
+# WHAT GOES WITH PRICE
+# ============================================================================
 
-    if "pin_lat" not in st.session_state:
-        st.session_state.pin_lat, st.session_state.pin_lon = 25.77, -80.14
+with tab_drivers:
+    st.markdown("### Price against size")
+    fig = px.scatter(view, x='sqft', y='lastSoldPrice', color='property_type', log_x=True, log_y=True,
+                     category_orders={'property_type': TYPE_ORDER}, color_discrete_map=TYPE_COLORS,
+                     hover_data={'zip': True, 'beds': True, 'baths': True, 'yr_built': True},
+                     labels={'sqft': 'Living area, sqft (log scale)', 'lastSoldPrice': 'Sale price (log scale)',
+                             'property_type': 'Type'}, opacity=0.65)
+    fig.update_layout(height=480, font=dict(size=15))
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Bigger homes cost more, but at any size prices span a wide range. {CHART_HINT}")
 
-    pin_map = folium.Map(location=[25.85, -80.28], zoom_start=10, tiles='OpenStreetMap')
-    pin_data = st_folium(
-        pin_map, width=700, height=MAP_HEIGHT, key="predict_pin_map",
-        returned_objects=["zoom", "bounds"]
-    )
-
-    zoom = pin_data.get("zoom") if pin_data else None
-    bounds = pin_data.get("bounds") if pin_data else None
-    bounds_valid = bool(
-        bounds and bounds.get("_southWest") and bounds.get("_northEast")
-        and bounds["_southWest"].get("lat") is not None
-        and bounds["_southWest"].get("lng") is not None
-        and bounds["_northEast"].get("lat") is not None
-        and bounds["_northEast"].get("lng") is not None
-    )
-    zoomed_in_enough = bool(zoom is not None and zoom >= PIN_ZOOM_THRESHOLD)
-
-    center_lat = center_lon = None
-    if bounds_valid:
-        south, west = bounds["_southWest"]["lat"], bounds["_southWest"]["lng"]
-        north, east = bounds["_northEast"]["lat"], bounds["_northEast"]["lng"]
-        center_lat = (south + north) / 2
-        center_lon = (west + east) / 2
-
-    in_box = bool(
-        center_lat is not None and center_lon is not None
-        and METRO_LAT_BOUNDS[0] <= center_lat <= METRO_LAT_BOUNDS[1]
-        and METRO_LON_BOUNDS[0] <= center_lon <= METRO_LON_BOUNDS[1]
-    )
-    # The rectangle also covers the Atlantic and the Everglades, so also require a ZIP with
-    # sales data nearby (urban ZIP centroids are ~2 miles apart).
-    pin_zip, pin_miles = (feature_code.nearest_zip_with_distance(ZIP_TABLE, center_lat, center_lon)
-                          if center_lat is not None else (None, None))
-    near_data = pin_miles is not None and pin_miles <= cfg.FAR_FROM_DATA_MILES
-    in_coverage = in_box and near_data
-    active = zoomed_in_enough and bounds_valid and in_coverage
-
-    if active:
-        st.session_state.pin_lat, st.session_state.pin_lon = center_lat, center_lon
-
-    lat, lon = st.session_state.pin_lat, st.session_state.pin_lon
-    crosshair_color = "#d62728" if active else "#a3a3a3"
-
-    st.markdown(f"""
-    <style>
-    #pin-crosshair {{
-        position: absolute;
-        width: 24px;
-        height: 24px;
-        border: 3px solid {crosshair_color};
-        border-radius: 50%;
-        box-shadow: 0 0 0 2px white, 0 1px 4px rgba(0,0,0,0.5);
-        transform: translate(-50%, -50%);
-        z-index: 999;
-        pointer-events: none;
-        left: -100px;
-        top: -100px;
-    }}
-    #pin-crosshair::after {{
-        content: "";
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 5px;
-        height: 5px;
-        background: {crosshair_color};
-        border-radius: 50%;
-        transform: translate(-50%, -50%);
-    }}
-    </style>
-    <div id="pin-crosshair"></div>
-    """, unsafe_allow_html=True)
-
-    # Positions the crosshair over the actual rendered map iframe rect, regardless of
-    # viewport width -- reaches into the parent page since components.html is sandboxed.
-    components.html("""
-    <script>
-    (function() {
-        function positionCrosshair() {
-            const doc = window.parent.document;
-            const crosshair = doc.getElementById('pin-crosshair');
-            if (!crosshair) return;
-            // Streamlit wraps this element in its own position:relative container --
-            // that container, not the document root, is what left/top actually resolve against.
-            const ownContainer = crosshair.closest('[data-testid="stElementContainer"]');
-            if (!ownContainer) return;
-            const prev = ownContainer.previousElementSibling;
-            const iframe = prev ? prev.querySelector('iframe') : null;
-            if (!iframe) return;
-            const iRect = iframe.getBoundingClientRect();
-            if (iRect.width === 0) return;
-            const cRect = ownContainer.getBoundingClientRect();
-            crosshair.style.left = (iRect.left + iRect.width / 2 - cRect.left) + 'px';
-            crosshair.style.top = (iRect.top + iRect.height / 2 - cRect.top) + 'px';
-        }
-        positionCrosshair();
-        // Keep polling for the life of the page (layout can shift after sidebar toggles,
-        // window resizes, or reruns); clear any timer left by an earlier run of this script.
-        const parentWin = window.parent;
-        if (parentWin.__pinCrosshairTimer) clearInterval(parentWin.__pinCrosshairTimer);
-        parentWin.__pinCrosshairTimer = setInterval(positionCrosshair, 250);
-        parentWin.addEventListener('resize', positionCrosshair);
-    })();
-    </script>
-    """, height=0)
-
-    if active:
-        st.markdown(f"**Pin location**: {lat:.4f}, {lon:.4f} (nearest ZIP with sales: {pin_zip}, {pin_miles:.1f} mi away)")
-    elif zoomed_in_enough and bounds_valid and not in_box:
-        st.markdown("**Pin location**: outside the Miami-Dade/Broward coverage area")
-    elif zoomed_in_enough and bounds_valid and not near_data:
-        st.markdown(f"**Pin location**: too far from any sales data (nearest ZIP with sales is {pin_zip}, "
-                    f"{pin_miles:.1f} miles away); move the map toward a built-up area")
+    st.markdown("### Median \\$/sqft by group")
+    group = st.radio("Group by", ["Bedrooms", "Build period", "County", "Property type"], horizontal=True)
+    col = {'Bedrooms': 'beds', 'Build period': 'build_period', 'County': 'county_name',
+           'Property type': 'property_type'}[group]
+    data = view.copy()
+    if col == 'beds':
+        data['beds'] = data['beds'].clip(upper=5).map(lambda b: '5+' if b >= 5 else str(int(b)))
+    table = summaries.summarize(data, col)
+    min_n = 10
+    table = table[table['sales'] >= min_n]
+    if table.empty:
+        st.info(f"No group has at least {min_n} sales under the current filters.")
     else:
-        st.markdown(f"**Pin location**: zoom in closer to register a pin (current zoom: {zoom})")
-
-    # Prediction button
-    if st.button("🔮 Predict Price", use_container_width=True):
-        # Build the feature row with the same code the training pipeline uses
-        # (src/features.py). Neighborhood stats come from the nearest ZIP in the training data.
-        nearest_zip = feature_code.nearest_zip(ZIP_TABLE, lat, lon)
-        zip_row = ZIP_TABLE.loc[nearest_zip]
-        features = feature_code.build_feature_row(
-            beds, baths, sqft, property_age, is_condo_val, is_townhouse_val,
-            lat, lon, zip_row, FLOOD_PROXY_SORTED,
-        )[FEATURE_NAMES]
-        dist_downtown = features.loc[0, 'dist_downtown']
-
-        # Predict
-        y_pred_log = model.predict(features)[0]
-        price_predicted = np.expm1(y_pred_log)
-
-        # Typical range: 10th-90th percentile of the model's test-set errors (log scale)
-        err_lo, err_hi = np.quantile(y_test - y_pred, [0.10, 0.90])
-        price_low = np.expm1(y_pred_log + err_lo)
-        price_high = np.expm1(y_pred_log + err_hi)
-
-        # Get SHAP values for this prediction
-        shap_val = explainer.shap_values(features)[0]
-        base_value = explainer.expected_value
-
-        # Display prediction
-        st.markdown("---")
-        col1, col2 = st.columns([1, 1])
-
-        with col1:
-            st.metric("💰 Predicted Price", f"${price_predicted:,.0f}")
-
-        with col2:
-            st.info(f"""
-            **Typical range**: \\${price_low:,.0f} — \\${price_high:,.0f}
-
-            80% of the model's errors on {len(X_test)} held-out sales fall inside a range this wide, so treat this as a rough estimate.
-            """)
-
-        # SHAP Force Plot
-        st.markdown("### 📊 What Drives This Price?")
-        st.markdown("Red features increase price • Blue features decrease price")
-
-        # Create bar chart of top SHAP values
-        shap_importance = pd.DataFrame({
-            'Feature': FEATURE_NAMES,
-            'Impact': shap_val
-        }).sort_values('Impact', key=abs, ascending=True).tail(10)
-
-        fig = go.Figure(data=[
-            go.Bar(
-                x=shap_importance['Impact'],
-                y=shap_importance['Feature'],
-                orientation='h',
-                marker=dict(
-                    color=shap_importance['Impact'],
-                    colorscale='RdBu',
-                    showscale=False
-                )
-            )
-        ])
-        fig.update_layout(
-            title="Top 10 Features Affecting This Price",
-            xaxis_title="SHAP Impact (← decreases | increases →)",
-            yaxis_title="Feature",
-            height=400,
-            showlegend=False,
-            font=dict(size=15)
-        )
+        fig = px.bar(table, x=col, y='median_price_per_sqft', text='sales',
+                     labels={col: group, 'median_price_per_sqft': 'Median $/sqft'})
+        fig.update_traces(texttemplate='n=%{text}', textposition='outside', marker_color='steelblue')
+        fig.update_layout(height=400, font=dict(size=15))
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("💡 Drag to zoom • Double-click to reset")
-
-        st.markdown("**Key Insights:**")
-        st.write(f"""
-        - **Size** ({sqft:,} sq ft) is the strongest overall driver in the model
-        - **Neighborhood**: nearest ZIP in the data is {nearest_zip} (median sale \\${zip_row['raw_median']:,.0f} across {int(zip_row['count'])} training sales; the model sees a version blended with the {zip_row['county']} median to dampen noise from ZIPs with few sales)
-        - **Distance to downtown Miami** is {dist_downtown:.1f} miles
-        - **Property age** is {property_age} years
-        """)
+        st.caption(f"Groups with fewer than {min_n} sales are hidden. n = number of sales in each bar. {CHART_HINT}")
+    st.warning("These are patterns in past sales, not causes. Bedrooms, size, type and location move together "
+               "(condos are smaller and concentrated in particular areas), so a gap between two bars is not "
+               "the effect of that one feature.")
 
 # ============================================================================
-# TAB 2: NEIGHBORHOOD MAP
+# ZIP TABLE
 # ============================================================================
 
-with tab2:
-    st.markdown("## Miami Real Estate Market")
-
-    top_zips = ZIP_TABLE[ZIP_TABLE['count'] >= 5].sort_values('raw_median', ascending=False).head(5)
-    top_lines = "\n".join(
-        f"{i}. ZIP {z} - \\${row['raw_median'] / 1000:,.0f}K median ({int(row['count'])} sales)"
-        for i, (z, row) in enumerate(top_zips.iterrows(), 1)
-    )
-    st.info(
-        "📍 Market Overview\n\n"
-        "**Top ZIP codes by median sale price** (ZIPs with at least 5 training sales):\n\n"
-        + top_lines
-    )
-
-    # 100 real sales from the held-out test set (the model never saw them in training)
-    sample_data = X_test.sample(min(100, len(X_test)), random_state=42).copy()
-    sample_data['Sale_Price'] = np.expm1(y_test.loc[sample_data.index])
-    sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data[FEATURE_NAMES]))
-    sample_data['Lat'] = sample_data['lat']
-    sample_data['Lon'] = sample_data['lon']
-
-    # Create Folium map centered on the Miami-Dade + Broward metro area
-    m = folium.Map(
-        location=[25.85, -80.28],
-        zoom_start=10,
-        tiles='OpenStreetMap'
-    )
-
-    # One marker per sale, colored by the ACTUAL sale price (red = low, green = high)
-    min_price = sample_data['Sale_Price'].min()
-    max_price = sample_data['Sale_Price'].max()
-
-    for idx, row in sample_data.iterrows():
-        price = row['Sale_Price']
-        color_ratio = (price - min_price) / (max_price - min_price)
-        color = f'hsl({color_ratio * 120}, 100%, 50%)'
-
-        folium.CircleMarker(
-            location=[row['Lat'], row['Lon']],
-            radius=6,
-            popup=f"Sold for ${price:,.0f} (model estimate: ${row['Predicted_Price']:,.0f})",
-            color=color,
-            fill=True,
-            fillColor=color,
-            fillOpacity=0.7,
-            weight=2
-        ).add_to(m)
-
-    st.markdown("### Miami-Dade & Broward Sales Map")
-    st.caption("Real sale prices of 100 held-out sales. Locations are ZIP-level (with small jitter), not exact addresses. "
-               "Click a marker to compare the sale price with the model's estimate.")
-    map_data = st_folium(m, width=700, height=500, key="miami_map")
-
-    # Filter stats to only the properties currently visible in the map viewport
-    view_data = sample_data
-    bounds = map_data.get("bounds") if map_data else None
-    if bounds and bounds.get("_southWest") and bounds.get("_northEast"):
-        south, west = bounds["_southWest"]["lat"], bounds["_southWest"]["lng"]
-        north, east = bounds["_northEast"]["lat"], bounds["_northEast"]["lng"]
-        in_view = sample_data[
-            sample_data["Lat"].between(south, north) &
-            sample_data["Lon"].between(west, east)
-        ]
-        if len(in_view) > 0:
-            view_data = in_view
-
-    st.markdown(f"### Sale Prices in View ({len(view_data)} sales)")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Median Price", f"${view_data['Sale_Price'].median():,.0f}")
-    with col2:
-        st.metric("Mean Price", f"${view_data['Sale_Price'].mean():,.0f}")
-    with col3:
-        st.metric("Price Range", f"${view_data['Sale_Price'].max() - view_data['Sale_Price'].min():,.0f}")
+with tab_zip:
+    st.markdown("### Every ZIP code")
+    table = summaries.zip_summary(view)
+    only_solid = st.checkbox(f"Hide ZIPs with fewer than {cfg.MIN_ZIP_SALES} sales", value=True, key="solid")
+    if only_solid:
+        table = table[~table['thin']]
+    out = table[['zip', 'county', 'sales', 'median_price', 'median_price_per_sqft', 'median_sqft']].rename(columns={
+        'zip': 'ZIP', 'county': 'County', 'sales': 'Sales', 'median_price': 'Median price',
+        'median_price_per_sqft': 'Median $/sqft', 'median_sqft': 'Median sqft'})
+    st.dataframe(out.style.format({'Median price': '${:,.0f}', 'Median $/sqft': '${:,.0f}',
+                                   'Median sqft': '{:,.0f}'}), hide_index=True, use_container_width=True)
+    st.caption("Click a column header to sort. Sales = number of sales behind each median.")
 
 # ============================================================================
-# TAB 3: MODEL DIAGNOSTICS
+# ABOUT
 # ============================================================================
 
-with tab3:
-    st.markdown("## Model Performance & Diagnostics")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("R² Score", f"{r2:.4f}", r2_note)
-    with col2:
-        st.metric("Mean Absolute Error", f"{mae:.4f}", f"{pct_error:.1f}% price error")
-    with col3:
-        st.metric("RMSE", f"{rmse:.4f}", "log scale")
-
-    st.markdown("---")
-
-    # Residuals plot
-    st.markdown("### Residual Analysis")
-    residuals = y_test - y_pred
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=y_pred,
-        y=residuals,
-        mode='markers',
-        marker=dict(
-            size=6,
-            color=residuals,
-            colorscale='RdBu',
-            showscale=True
-        ),
-        text=[f"Residual: {r:.3f}" for r in residuals],
-        hovertemplate="<b>%{text}</b><extra></extra>"
-    ))
-
-    fig.add_hline(y=0, line_dash="dash", line_color="red")
-    fig.update_layout(
-        title="Residuals vs Predicted Price",
-        xaxis_title="Predicted Price (log scale)",
-        yaxis_title="Residual (log scale)",
-        height=400,
-        font=dict(size=15)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("💡 Drag to zoom • Double-click to reset")
-
-    st.markdown("---")
-
-    # Feature Importance (SHAP)
-    st.markdown("### Global Feature Importance (SHAP)")
-
-    shap_summary = pd.DataFrame({
-        'Feature': FEATURE_NAMES,
-        'Importance': np.abs(shap_values).mean(axis=0)
-    }).sort_values('Importance', ascending=True).tail(10)
-
-    fig = go.Figure(data=[
-        go.Bar(
-            x=shap_summary['Importance'],
-            y=shap_summary['Feature'],
-            orientation='h',
-            marker_color='steelblue',
-            text=[f'{v:.2f}' for v in shap_summary['Importance']],
-            textposition='auto',
-            hovertemplate='%{y}: %{x:.2f}<extra></extra>'
-        )
-    ])
-    fig.update_layout(
-        title="Top 10 Most Important Features",
-        xaxis_title="Mean Absolute SHAP Value",
-        yaxis_title="Feature",
-        xaxis=dict(tickformat='.2f'),
-        height=400,
-        showlegend=False,
-        font=dict(size=15)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("💡 Drag to zoom • Double-click to reset")
-
-    st.markdown("---")
-
-    # Model info
-    st.markdown("### Model Details")
-    st.info(f"""
-    **Algorithm**: LightGBM Regressor
-
-    **Evaluation**: {len(X_test)} held-out Miami-Dade & Broward sales (80/20 split)
-
-    **Features**: {len(FEATURE_NAMES)} (none derived from the sale price; neighborhood stats use training sales only)
-
-    **Target**: Log-transformed sale price
-
-    **Hyperparameters**:
-    - num_leaves: 31
-    - learning_rate: 0.05
-    - num_boost_rounds: 200
-    """)
-
-# ============================================================================
-# FOOTER
-# ============================================================================
-
-st.markdown("---")
-st.markdown(f"""
-<div style="text-align: center">
-    <small>Miami Real Estate ML • R² = {r2:.2f} • {pct_error:.0f}% mean price error</small><br>
-    <small><a href="https://github.com/brianravelo28/miami-real-estate-ml">View on GitHub</a></small>
-</div>
-""", unsafe_allow_html=True)
+with tab_about:
+    st.markdown("### About the data")
+    st.markdown(f"""
+- **Source:** Kaggle "Florida Real Estate Sold 2026" (10,893 statewide closed sales). Filtered to Miami-Dade
+  and Broward by looking up each ZIP's county, then to sales of \\$50K-\\$10M and 400-10,000 sqft:
+  **{len(sales):,} sales in {sales['zip'].nunique()} ZIP codes**.
+- **Small ZIPs:** the median ZIP has {int(sales['zip'].value_counts().median())} sales, so ZIP medians are noisy.
+  ZIPs under {cfg.MIN_ZIP_SALES} sales are flagged.
+- **Location is a ZIP center,** not an address. The file has no coordinates, so the map places each ZIP at its center.
+- **No sale dates.** This is one snapshot; it says nothing about trends or seasonality.
+- **Not in the data:** HOA fees, taxes, condition, views, lot size, waterfront.
+- **Not a random sample** of all sales in these counties, so treat the numbers as a description of this file.
+""")
+    st.markdown("### Why there is no price predictor")
+    st.markdown("""
+An earlier version predicted prices with LightGBM. Its first score (R² 0.99) came from features built
+from the sale price itself; after fixing that leak the honest score was about R² 0.82, with a typical error near
+28% and an 80% error band from about -29% to +63%. Location, the part that makes a Miami price interesting,
+was the weakest input: with ZIP-level coordinates and about 7 sales per ZIP, the same house priced
+differently depending on which neighboring ZIP it landed in (about 10% typically, close to 30% in the worst tenth of cases), and how well a location finds its true ZIP couldn't be validated.
+A tool that implies more precision than 990 sales can support was removed instead of caveated further.
+""")
+    st.markdown("[Code and write-up on GitHub](https://github.com/brianravelo28/miami-real-estate-ml)")

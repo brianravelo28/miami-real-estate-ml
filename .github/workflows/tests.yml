@@ -10,8 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true   # the saved model and data pickles are Git LFS files
 
       # Python 3.14 with unpinned-minor libraries, the same setup the Render deploy uses
       - uses: actions/setup-python@v5

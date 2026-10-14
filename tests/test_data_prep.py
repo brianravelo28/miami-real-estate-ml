@@ -118,10 +118,6 @@ def test_year_built_is_renamed_and_missing_columns_raise():
         data_prep.clean_sales(metro_frame().drop(columns=['sqft']))
 
 
-def test_coordinate_jitter_is_applied_once_and_is_reproducible():
-    base = metro_frame()
-    a, b = data_prep.clean_sales(base), data_prep.clean_sales(base)
-    pd.testing.assert_frame_equal(a, b)
-    centroid = FAKE_GEO.loc['33101', 'latitude']
-    assert not np.allclose(a['lat'], centroid)             # jitter happened
-    assert (a['lat'] - centroid).abs().max() < 0.05        # and didn't happen twice or at a wild scale
+def test_coordinates_stay_at_the_zip_center():
+    out = data_prep.clean_sales(metro_frame())
+    assert np.allclose(out['lat'], FAKE_GEO.loc['33101', 'latitude'])  # no random jitter added

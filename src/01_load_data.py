@@ -1,12 +1,11 @@
 """
 Step 1: Load and Validate Data
 Loads the Florida sales CSV, keeps Miami-Dade + Broward (by geocoded county), cleans it,
-and saves the result. The rules live in data_prep.py so they can be tested.
+and saves the result as data/sales_clean.csv. The rules live in data_prep.py so they can be tested.
 """
 
 import logging
 import os
-import pickle
 
 import pandas as pd
 
@@ -81,12 +80,11 @@ def main():
 
     explore_data(df)
 
-    with open(FEATURES_PATH, 'wb') as f:
-        pickle.dump(df, f)
-    logger.info(f"\n✓ Saved cleaned data to {FEATURES_PATH}")
+    df[OUTPUT_COLS].to_csv(CLEAN_DATA_PATH, index=False)
+    logger.info(f"\n✓ Saved cleaned data to {CLEAN_DATA_PATH}")
 
     logger.info("\n" + "=" * 60)
-    logger.info("✓ Step 1 Complete. Ready for feature engineering.")
+    logger.info("✓ Step 1 Complete. Dashboard data is ready (streamlit run app.py).")
     logger.info("=" * 60)
 
 

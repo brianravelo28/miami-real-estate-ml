@@ -82,3 +82,6 @@ Thumbs.db
 *.bak
 *.swp
 .~*
+
+# The cleaned dashboard data is committed (small, and Render needs it)
+!data/sales_clean.csv

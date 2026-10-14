@@ -1,359 +1,87 @@
-# 🏠 Miami Real Estate Price Predictor
+# 🏠 Miami Real Estate Market Explorer
 
-![Miami Real Estate Price Predictor dashboard](docs/screenshot.png)
-
-A machine learning pipeline that predicts residential property prices in Miami-Dade and Broward counties using geospatial features, neighborhood aggregations, and gradient boosting, with SHAP-based feature attribution and an interactive Streamlit dashboard.
+An interactive dashboard of ~1,000 recent home sales in Miami-Dade and Broward counties: price by ZIP code, by property type, and against size. It describes past sales; it does not predict prices (see [why](#why-theres-no-price-predictor)).
 
 **Live Demo**: [miami-real-estate-ml.onrender.com](https://miami-real-estate-ml.onrender.com/) (free tier, so the first load may take a moment to wake up)
 
-**Run locally**: `streamlit run app.py` (opens at `http://localhost:8501`)
+**Run locally**: `pip install -r requirements.txt`, then `streamlit run app.py` (opens at `http://localhost:8501`)
 
 ---
 
-## 🎯 Project Overview
+## What's in the dashboard
 
-This project demonstrates end-to-end applied ML: data acquisition → feature engineering → model training → explainability → deployment. It combines:
+Sidebar filters (county, property type, price range) apply to every tab.
 
-- **990 Miami-Dade & Broward property sales** (2026 Kaggle dataset, filtered by county via ZIP-code geocoding)
-- **16 engineered features** (property, geospatial, neighborhood, flood proxy), none derived from the sale price
-- **LightGBM regressor** with R² = 0.83 on held-out sales and ~28% average price error
-- **SHAP explanations** for every prediction
-- **Interactive Streamlit dashboard** for price estimation, a neighborhood map, and model diagnostics
+| Tab | Shows |
+|-----|-------|
+| **Overview** | Sales count, median price, median $/sqft, price distribution by property type, county and type summaries |
+| **Map by ZIP** | One circle per ZIP: size = number of sales, color = median price (by rank). ZIPs with fewer than 5 sales are hidden by default and shaded grey if shown |
+| **What goes with price** | Price vs size scatter (log scales) and median $/sqft by bedrooms, build period, county or type. Every bar shows its sample size; groups under 10 sales are hidden |
+| **ZIP table** | Sales count, median price, median $/sqft and median size for every ZIP |
+| **About the data** | Source, cleaning rules, limitations, and why there is no predictor |
 
----
+## The data
 
-## 📊 Key Results
+- **Source:** [Florida Real Estate Sold 2026](https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026) (Kaggle), 10,893 statewide closed sales.
+- **Miami-Dade + Broward only:** each ZIP is looked up in `pgeocode` and kept if its county is a target county (not by ZIP prefix; prefixes like 334 also cover Palm Beach and Monroe). A bounding-box check drops ZIPs the database places far from their county.
+- **Cleaning:** sales of $50K–$10M and 400–10,000 sqft, with all key fields present.
+- **Result:** **990 sales** (503 Miami-Dade, 487 Broward) in **128 ZIP codes**. The median ZIP has 7 sales and 91 ZIPs have at least 5.
 
-| Metric | Value | Target | Status |
-|--------|-------|--------|--------|
-| **R² Score** | 0.8210 | ≥ 0.80 | ✅ |
-| **RMSE (log scale)** | 0.3400 | ≤ 0.20 | ❌ |
-| **MAE (log scale)** | 0.2454 | ≤ 0.18 | ❌ |
-| **Mean Price Error** | 27.8% | — | — |
+Limitations: the file has no street addresses (the map places each ZIP at its center), no sale dates (one snapshot, no trends), and no HOA, tax, condition, view or lot-size fields. It is not a random sample of all sales. Medians for ZIPs with only a few sales mostly reflect which houses happened to sell.
 
-Evaluated on 198 held-out sales. Training R² is 0.968, so the model overfits somewhat on this small (792-row) training set. An earlier version reported R² = 0.992, but that came from features computed from the sale price (target leakage), which have since been removed (see [Methodology](docs/METHODOLOGY.md)).
+## Why there's no price predictor
 
-### Model comparison (cross-validated)
+An earlier version of this project predicted prices with LightGBM and SHAP. It was removed on purpose:
 
-A single 198-row split is noisy, so `src/05_evaluate_models.py` compares models with 5-fold × 3-repeat cross-validation on the 792 development rows (ZIP stats rebuilt inside each fold, so there's no leakage), then scores the untouched holdout once:
+1. **The first score was wrong.** It reported R² 0.99, but two features were computed from the sale price itself and ZIP price statistics included the test rows (target leakage). After removing them, the honest score was R² ≈ 0.82.
+2. **0.82 is not precise.** The typical error was about 28%, and the 80% error band ran from roughly −29% to +63% of the estimate. Most of the signal came from square footage and property type; the model also overfit (train R² 0.97 vs test 0.82).
+3. **Location was the weak part.** With ZIP-level coordinates and ~7 sales per ZIP, the same house's estimate moved by about 10% (up to ~30% in the worst tenth of cases) depending on which neighboring ZIP it was matched to. Shrinking ZIP statistics toward the county reduced that on average but not for every case, and how well a real address finds its true ZIP couldn't be validated because the data has no addresses.
 
-| Model | CV R² (mean ± sd) | Holdout R² |
-|-------|-------------------|------------|
-| Predict the mean | -0.010 ± 0.012 | 0.000 |
-| Linear (property features only) | 0.606 ± 0.041 | 0.544 |
-| Ridge (all 16 features) | 0.761 ± 0.032 | 0.727 |
-| Random forest | 0.815 ± 0.032 | 0.803 |
-| **LightGBM (current config)** | **0.827 ± 0.024** | **0.821** |
-| LightGBM (tuned, 40-config random search) | 0.836 ± 0.027 | 0.827 |
-
-Takeaways: location and neighborhood features lift R² from 0.61 to 0.76 (Ridge), and tree models add roughly another 0.06–0.07. The tuning search found nothing meaningfully better (+0.01 in CV and +0.006 on the holdout, both well within noise), so the current config stays. The train/test gap is not something these hyperparameters fix; more data or better features are the lever. Full details: [`reports/model_comparison.md`](reports/model_comparison.md).
-
-### Neighborhood stats: shrinkage toward the county
-
-ZIP price stats are noisy (about 6 training sales per ZIP), so each ZIP's median and std are blended toward its county's, with weight n/(n+20) on the ZIP's own n sales (`NEIGHBORHOOD_SHRINKAGE_K`). The setting comes from the same cross-validation script: the largest value whose paired accuracy cost stayed within one standard error. It costs no measurable accuracy and reduces how much a house's estimate moves when its neighborhood inputs come from the neighboring ZIP (median swing about 10% → 9%, 90th-percentile swing about 34% → 27% on the holdout), but it does not remove that sensitivity, and for one specific example (the default map position) the gap between the two nearest ZIPs actually grew. Treat location-driven differences of ±10–20% between neighboring ZIPs as noise.
-
-**Top 3 Features** (by model gain):
-1. `sqft` — Property size
-2. `sqft_log` — Log-scaled size (non-linear effects)
-3. `baths` — Bathroom count (correlated with size)
+Rather than keep adding caveats to a point estimate, the dashboard shows the sales themselves, with their sample sizes. The full predictor is in the git history (commit `13a8747`).
 
 ---
 
-## 🚀 Quick Start
-
-### Prerequisites
-- Python 3.11+
-- pip or conda
-
-### Installation
+## Rebuild the data
 
 ```bash
-# Clone repo
-git clone https://github.com/brianravelo28/miami-real-estate-ml.git
-cd miami-real-estate-ml
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Download dataset
-# Go to: https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026
-# Download CSV → place at: data/florida_sold_2026.csv
+pip install -r requirements-dev.txt                 # adds pytest and pgeocode
+# download the Kaggle CSV to data/florida_sold_2026.csv (see data/acquisition.md)
+python run_pipeline.py                              # writes data/sales_clean.csv
 ```
 
-### Run Full Pipeline
+`data/sales_clean.csv` (the only file the dashboard reads) is committed, so the app runs without the raw download.
+
+## Tests
 
 ```bash
-# Execute the pipeline steps in sequence
-python run_pipeline.py
-```
-
-Or run individual steps:
-
-```bash
-python src/01_load_data.py              # Load, geocode & validate
-python src/02_engineer_features.py      # Feature creation
-python src/03_train_model.py            # Model training
-python src/04_shap_analysis.py          # Explainability
-python src/05_evaluate_models.py        # Cross-validation, baselines, tuning (~2 min, optional)
-```
-
-Then launch the dashboard:
-
-```bash
-streamlit run app.py                    # http://localhost:8501
-```
-
-### Reproducibility
-
-Re-running `python run_pipeline.py` reproduces the committed data, lookups, and model exactly (verified by running it twice and comparing every output). The two sources of randomness are seeded with `RANDOM_STATE` (coordinate jitter in step 1, SHAP sample plots in step 4); LightGBM training is already deterministic here, and the train/test split is seeded.
-
-Library versions are the one thing a pickled model is sensitive to. `requirements.txt` sets a minimum version and a cap at the next major version for every package, `.python-version` pins Python for Render, and step 3 writes `models/model_metadata.json` (Python, LightGBM, pandas, NumPy, scikit-learn versions, seed, metrics). The dashboard's sidebar **Environment** panel shows the deployed commit and compares those build-time versions against what's running, flagging major-version changes; [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) lists the known-good set.
-
-### Run the Tests
-
-```bash
-pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The suite (`tests/`) checks the things that went wrong earlier in this project:
-- **No target leakage**: changing a test-set sale price changes no feature; a training row never sees its own price (leave-one-out); price-derived features can't be added back to `FEATURE_COLS`.
-- **Train/serve parity**: the dashboard's single-row feature builder returns exactly what the training pipeline produces for the same property.
-- **Step 1 data rules** (`tests/test_data_prep.py`, fake geocoder, runs offline): float ZIPs, county filtering instead of ZIP prefixes, the mislabeled-ZIP bounding box, outlier rules.
-- **Saved files**: the committed model, lookups, and train/test matrices load, match the feature list, predict sensibly, and are reproducible from step 1's output (these skip if a file is missing).
+- `tests/test_data_prep.py`: the cleaning rules, with a fake geocoder so it runs offline: float ZIPs, county filtering instead of ZIP prefixes, the mislabeled-ZIP bounding box, price and size outliers.
+- `tests/test_summaries.py`: ZIP counts and medians, the thin-ZIP flag, and a check that the committed dataset still matches what the dashboard expects.
+- `tests/test_requirements.py`: every dependency has a minimum version and a next-major cap.
 
----
+GitHub Actions runs the suite on every push.
 
-## 📁 Project Structure
+## Project structure
 
 ```
-miami-real-estate-ml/
-├── README.md                          # This file
-├── LICENSE                            # MIT license
-├── app.py                             # Streamlit dashboard (entry point)
-├── requirements.txt                   # Python dependencies
-├── requirements-dev.txt               # Adds pytest for the test suite
-├── .gitignore                         # Git ignore rules
-├── run_pipeline.py                    # Master executor
-│
+├── app.py                  # Streamlit dashboard
+├── run_pipeline.py         # Builds data/sales_clean.csv
+├── requirements.txt        # Runtime dependencies
+├── requirements-dev.txt    # + pytest, pgeocode
 ├── src/
-│   ├── 01_load_data.py                # Step 1: Load, geocode & validate data
-│   ├── data_prep.py                   # Step 1 rules: ZIP cleaning, county filter, outliers (tested)
-│   ├── features.py                    # Feature code shared by the pipeline AND the dashboard
-│   ├── 02_engineer_features.py        # Step 2: Feature engineering (thin script around features.py)
-│   ├── 03_train_model.py              # Step 3: Train LightGBM
-│   ├── 04_shap_analysis.py            # Step 4: SHAP explanations
-│   ├── 05_evaluate_models.py          # Step 5 (optional): CV, baselines, hyperparameter search
-│   └── real_estate_config.py          # Single source of truth (paths, params)
-│
-├── tests/                             # pytest suite (leakage guards, parity, step 1 rules, reproducibility)
-│
+│   ├── 01_load_data.py     # Load, geocode ZIPs, clean, save
+│   ├── data_prep.py        # The cleaning rules (tested)
+│   ├── summaries.py        # Medians and counts used by the dashboard (tested)
+│   └── real_estate_config.py
 ├── data/
-│   ├── acquisition.md                 # How to download dataset
-│   ├── florida_sold_2026.csv          # Raw Kaggle data (downloaded manually)
-│   ├── features_engineered.pkl        # Output of Step 1
-│   ├── X_train.pkl, y_train.pkl       # Output of Step 2
-│   ├── X_test.pkl, y_test.pkl         # Output of Step 2
-│
-├── models/
-│   └── lightgbm_miami_v1.pkl          # Trained model (Step 3 output)
-│
-├── reports/
-│   ├── evaluation_report.txt          # Model performance metrics
-│   ├── residuals.png                  # Residual plots
-│   ├── actual_vs_predicted.png        # Predictions vs reality
-│   ├── shap_summary.png               # SHAP summary plot
-│   ├── shap_feature_importance.png    # Feature importance (SHAP)
-│   ├── shap_force_sample_*.png        # Individual prediction explanations
-│   ├── shap_dependence_plots.png      # Feature dependence analysis
-│   └── SHAP_INTERPRETATION_GUIDE.md   # How to read SHAP plots
-│
-└── docs/
-    ├── ARCHITECTURE.md                # System design & data flow
-    ├── METHODOLOGY.md                 # ML approach & trade-offs
-    ├── DATA_SCHEMA.md                 # Feature definitions & transformations
-    └── DEPLOYMENT.md                  # Render deployment guide
+│   ├── acquisition.md      # How to download the Kaggle file
+│   └── sales_clean.csv     # Cleaned sales (dashboard input)
+├── tests/
+└── docs/                   # METHODOLOGY, DATA_SCHEMA, ARCHITECTURE, DEPLOYMENT
 ```
 
----
+## License
 
-## 🔄 Data Flow
-
-```
-Florida Real Estate CSV (Kaggle)
-    ↓ (Step 1: Load & Validate)
-Cleaned dataset: 990 Miami-Dade & Broward properties
-    ↓ (Step 2: Feature Engineering)
-80/20 train/test split, then 16 features (ZIP stats from training sales only)
-    ↓ (Step 3: Train Model)
-LightGBM model (200 boosting rounds)
-    ├─→ (Step 4: SHAP Analysis) → Explainability plots
-    └─→ Streamlit dashboard (app.py) → Interactive predictions
-```
-
----
-
-## 📊 Dashboard Features
-
-The Streamlit app (`streamlit run app.py`) provides three tabs:
-
-### 🔍 **Tab 1: Search & Predict**
-- Input property details (beds, baths, sqft, property type)
-- Pick a location by panning a map under a fixed crosshair (turns red only inside Miami-Dade/Broward and within 5 miles of a ZIP that has sales; open water and the Everglades stay gray)
-- Get a price prediction with a "typical range" based on the model's held-out errors
-- View a SHAP bar chart of the features driving that prediction
-
-### 🗺️ **Tab 2: Neighborhood Map**
-- Interactive Folium map of 100 real held-out sales, colored by actual sale price (click a marker to see the model's estimate for that sale)
-- Median, mean, and range of the sale prices in the current map view
-
-### 📈 **Tab 3: Model Diagnostics**
-- R² score, RMSE, MAE breakdown
-- Residual plot (predictions vs actual)
-- Global feature importance (mean absolute SHAP value)
-
----
-
-## 🛠️ Configuration
-
-All parameters are centralized in [`real_estate_config.py`](src/real_estate_config.py):
-
-```python
-# Data filtering
-MIN_PRICE = 50_000
-MAX_PRICE = 10_000_000
-MIN_SQFT = 400
-MAX_SQFT = 10_000
-
-# Model hyperparameters
-LIGHTGBM_NUM_ROUNDS = 200
-LIGHTGBM_LEARNING_RATE = 0.05
-
-# Coverage area (filtered by county via ZIP geocoding)
-TARGET_COUNTIES = ['Miami-Dade', 'Broward']
-
-# Geospatial reference points
-DOWNTOWN_MIAMI = (25.7617, -80.1918)
-BRICKELL = (25.7582, -80.1911)
-MIAMI_BEACH = (25.7945, -80.1298)
-```
-
-To adjust parameters, edit this file once—all scripts automatically pick up changes.
-
----
-
-## 🤖 Model Details
-
-### Architecture
-- **Algorithm**: LightGBM (Gradient Boosting Decision Trees)
-- **Target**: Log-transformed sale price (for reduced skewness)
-- **Features**: 16 numeric features (no categorical encoding needed)
-- **Train/Test Split**: 80/20, stratified by price quartile, done before any price-based feature is computed
-
-### Feature Categories
-
-| Category | Examples | Count |
-|----------|----------|-------|
-| **Property** | beds, baths, sqft, sqft_log, property_age, is_condo, is_townhouse | 7 |
-| **Geospatial** | lat, lon, dist_downtown, dist_brickell, dist_beach | 5 |
-| **Neighborhood** | neighborhood_median_price, neighborhood_price_std, neighborhood_sales_count (training sales only) | 3 |
-| **Risk** | flood_risk_percentile (latitude proxy) | 1 |
-
-### Hyperparameters
-```python
-{
-    'objective': 'regression',
-    'metric': 'rmse',
-    'num_leaves': 31,
-    'learning_rate': 0.05,
-    'feature_fraction': 0.8,
-    'bagging_fraction': 0.8,
-    'bagging_freq': 5,
-}
-```
-
----
-
-## 📈 Explainability
-
-All predictions include **SHAP (SHapley Additive exPlanations)** values:
-
-- **Summary Plot**: Shows which features push prices up/down globally
-- **Force Plot**: For each prediction, displays individual feature contributions
-- **Dependence Plot**: Scatter plot of feature value vs SHAP value
-
-Example: "This property is predicted above the baseline mainly because it is large (`sqft`), partly offset by being a condo in a lower-priced ZIP."
-
----
-
-## 🔬 Model Limitations & Next Steps
-
-### Current Limitations
-- **Modest accuracy**: ~28% average price error (an 80% error band of roughly -29% to +63%), with a noticeable train/test gap; the dashboard shows this as a wide "typical range" instead of a point estimate alone
-- **Sparse neighborhood stats**: ZIP statistics come from ~6 training sales per ZIP on average (4 ZIPs have none), so they are noisy
-- The dashboard maps the pin to the nearest ZIP centroid in the data to look up those stats. How well a real map pin finds its real ZIP cannot be measured here: the data has no real addresses (coordinates are ZIP centroids plus jitter), so the nearest-centroid lookup looks almost perfect on the test set for circular reasons. The headline metrics assume the correct ZIP.
-- Trained only on Miami-Dade & Broward 2026 data; may not generalize to other areas/years
-- Geospatial features use ZIP-code centroids (plus small seeded jitter), not exact property addresses
-- The jitter draw matters a little: with a different random seed the test R² moves by a few hundredths (0.826 vs 0.819 between two earlier runs), which is the same size as the cross-validation noise
-- No flood risk from FEMA shapefiles (using latitude proxy instead)
-- No macroeconomic features (interest rates, inventory, etc.)
-
-### Potential Improvements
-1. **Add FEMA shapefiles** for true flood zone encoding
-2. **Temporal dynamics**: Include YoY price trends, interest rates
-3. **Ensemble**: Combine LightGBM with neural networks for hybrid predictions
-4. **Cross-market**: Retrain on NYC, LA, Chicago for transfer learning
-5. **Production deployment**: FastAPI backend + React frontend + PostgreSQL
-
----
-
-## 📦 Dependencies
-
-Core libraries (see `requirements.txt` for versions):
-- `pandas`, `numpy` — Data manipulation
-- `scikit-learn` — ML utilities (train/test split, metrics)
-- `lightgbm` — Gradient boosting
-- `shap` — Model explainability
-- `streamlit`, `plotly` — Dashboard and interactive charts
-- `folium`, `streamlit-folium` — Interactive maps
-- `geopy`, `pgeocode` — Distance calculations and ZIP-code geocoding
-- `pillow` — Image handling
-
----
-
-## 📜 License
-
-MIT License — freely use, modify, and distribute for commercial or personal projects. See [`LICENSE`](LICENSE) for details.
-
----
-
-## 🤝 Contributing
-
-Found a bug or want to improve the model? Pull requests welcome!
-
-**Process**:
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feature/improve-features`)
-3. Commit changes (`git commit -m "Add flood zone encoding"`)
-4. Push to branch (`git push origin feature/improve-features`)
-5. Open a Pull Request
-
----
-
-## 📞 Attribution
-
-**Author**: [brianravelo28](https://github.com/brianravelo28)  
-**Dataset**: [Florida Real Estate Sold 2026](https://www.kaggle.com/datasets/kanchana1990/florida-real-estate-sold-dataset-2026) by Kanchana Ranasinghe
-
----
-
-## 🎓 Resources & References
-
-- [SHAP Documentation](https://shap.readthedocs.io/) — Model interpretability
-- [LightGBM Best Practices](https://lightgbm.readthedocs.io/en/latest/Features.html) — Hyperparameter tuning
-- [Streamlit Docs](https://docs.streamlit.io/) — Dashboard framework
-- [Geospatial Feature Engineering](https://towardsdatascience.com/spatial-machine-learning-4c7d86920d56) — Location-based ML
-
----
-
-**Last Updated**: October 2026
+MIT, see [LICENSE](LICENSE).
