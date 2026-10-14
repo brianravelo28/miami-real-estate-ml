@@ -14,8 +14,6 @@ import sys
 import lightgbm
 import sklearn
 import shap
-from PIL import Image
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import folium
 from streamlit_folium import st_folium
@@ -24,6 +22,7 @@ import streamlit.components.v1 as components
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(APP_DIR, 'src'))
 import features as feature_code  # shared with the training pipeline (src/features.py)
+import real_estate_config as cfg
 
 # Set page config
 st.set_page_config(
@@ -50,6 +49,21 @@ def load_artifacts():
     shap_values = explainer.shap_values(X_test)
 
     return model, X_test, y_test, explainer, shap_values, lookups
+
+@st.cache_data
+def load_model_metadata():
+    """Settings and library versions the model was built with (written by step 3)"""
+    try:
+        with open(os.path.join(APP_DIR, 'models', 'model_metadata.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def money(value):
+    """$9.9M / $65K, escaped so Streamlit doesn't read $...$ as math"""
+    return f"\\${value / 1e6:.1f}M" if value >= 1e6 else f"\\${value / 1e3:.0f}K"
+
 
 # ============================================================================
 # STREAMLIT APP
@@ -111,27 +125,28 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📈 Dataset Info")
-    st.info("""
+    meta = load_model_metadata() or {}
+    records = (f"{meta['n_records']:,} Miami-Dade & Broward properties"
+               if 'n_records' in meta else "Miami-Dade & Broward properties")
+    price_range = (f"{money(meta['price_min'])}–{money(meta['price_max'])}"
+                   if 'price_min' in meta and 'price_max' in meta else "n/a")
+    st.info(f"""
     **Records:**
 
-    990 Miami-Dade & Broward properties
+    {records}
 
-    **Date**: 2026
+    **Date**: {cfg.REFERENCE_YEAR}
 
     **Price Range:**
 
-    \\$50K–\\$10M
+    {price_range}
     """)
     st.markdown("### 🧩 Features")
     st.selectbox("Features", FEATURE_NAMES, label_visibility="collapsed")
 
     # Which library versions built the model vs which are running (pickles are version-sensitive)
     with st.expander("⚙️ Environment"):
-        try:
-            with open(os.path.join(APP_DIR, 'models', 'model_metadata.json'), encoding='utf-8') as f:
-                built = json.load(f)
-        except Exception:
-            built = None
+        built = load_model_metadata()
         running = {
             'python': platform.python_version(), 'lightgbm': lightgbm.__version__,
             'pandas': pd.__version__, 'numpy': np.__version__, 'scikit_learn': sklearn.__version__,
@@ -209,11 +224,17 @@ with tab1:
         center_lat = (south + north) / 2
         center_lon = (west + east) / 2
 
-    in_coverage = bool(
+    in_box = bool(
         center_lat is not None and center_lon is not None
         and METRO_LAT_BOUNDS[0] <= center_lat <= METRO_LAT_BOUNDS[1]
         and METRO_LON_BOUNDS[0] <= center_lon <= METRO_LON_BOUNDS[1]
     )
+    # The rectangle also covers the Atlantic and the Everglades, so also require a ZIP with
+    # sales data nearby (urban ZIP centroids are ~2 miles apart).
+    pin_zip, pin_miles = (feature_code.nearest_zip_with_distance(ZIP_TABLE, center_lat, center_lon)
+                          if center_lat is not None else (None, None))
+    near_data = pin_miles is not None and pin_miles <= cfg.FAR_FROM_DATA_MILES
+    in_coverage = in_box and near_data
     active = zoomed_in_enough and bounds_valid and in_coverage
 
     if active:
@@ -286,9 +307,12 @@ with tab1:
     """, height=0)
 
     if active:
-        st.markdown(f"**Pin location**: {lat:.4f}, {lon:.4f}")
-    elif zoomed_in_enough and bounds_valid and not in_coverage:
+        st.markdown(f"**Pin location**: {lat:.4f}, {lon:.4f} (nearest ZIP with sales: {pin_zip}, {pin_miles:.1f} mi away)")
+    elif zoomed_in_enough and bounds_valid and not in_box:
         st.markdown("**Pin location**: outside the Miami-Dade/Broward coverage area")
+    elif zoomed_in_enough and bounds_valid and not near_data:
+        st.markdown(f"**Pin location**: too far from any sales data (nearest ZIP with sales is {pin_zip}, "
+                    f"{pin_miles:.1f} miles away); move the map toward a built-up area")
     else:
         st.markdown(f"**Pin location**: zoom in closer to register a pin (current zoom: {zoom})")
 
@@ -367,7 +391,7 @@ with tab1:
         st.markdown("**Key Insights:**")
         st.write(f"""
         - **Size** ({sqft:,} sq ft) is the strongest overall driver in the model
-        - **Neighborhood**: nearest ZIP in the data is {nearest_zip} (median sale \\${zip_row['median']:,.0f}, {int(zip_row['count'])} training sales)
+        - **Neighborhood**: nearest ZIP in the data is {nearest_zip} (median sale \\${zip_row['raw_median']:,.0f} across {int(zip_row['count'])} training sales; the model sees a version blended with the {zip_row['county']} median to dampen noise from ZIPs with few sales)
         - **Distance to downtown Miami** is {dist_downtown:.1f} miles
         - **Property age** is {property_age} years
         """)
@@ -379,9 +403,9 @@ with tab1:
 with tab2:
     st.markdown("## Miami Real Estate Market")
 
-    top_zips = ZIP_TABLE[ZIP_TABLE['count'] >= 5].sort_values('median', ascending=False).head(5)
+    top_zips = ZIP_TABLE[ZIP_TABLE['count'] >= 5].sort_values('raw_median', ascending=False).head(5)
     top_lines = "\n".join(
-        f"{i}. ZIP {z} - \\${row['median'] / 1000:,.0f}K median ({int(row['count'])} sales)"
+        f"{i}. ZIP {z} - \\${row['raw_median'] / 1000:,.0f}K median ({int(row['count'])} sales)"
         for i, (z, row) in enumerate(top_zips.iterrows(), 1)
     )
     st.info(
@@ -390,9 +414,10 @@ with tab2:
         + top_lines
     )
 
-    # Get sample data and predictions
+    # 100 real sales from the held-out test set (the model never saw them in training)
     sample_data = X_test.sample(min(100, len(X_test)), random_state=42).copy()
-    sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data))
+    sample_data['Sale_Price'] = np.expm1(y_test.loc[sample_data.index])
+    sample_data['Predicted_Price'] = np.expm1(model.predict(sample_data[FEATURE_NAMES]))
     sample_data['Lat'] = sample_data['lat']
     sample_data['Lon'] = sample_data['lon']
 
@@ -403,20 +428,19 @@ with tab2:
         tiles='OpenStreetMap'
     )
 
-    # Add markers for each property
-    min_price = sample_data['Predicted_Price'].min()
-    max_price = sample_data['Predicted_Price'].max()
+    # One marker per sale, colored by the ACTUAL sale price (red = low, green = high)
+    min_price = sample_data['Sale_Price'].min()
+    max_price = sample_data['Sale_Price'].max()
 
     for idx, row in sample_data.iterrows():
-        price = row['Predicted_Price']
-        # Color based on price (red = low, green = high)
+        price = row['Sale_Price']
         color_ratio = (price - min_price) / (max_price - min_price)
-        color = f'hsl({color_ratio * 120}, 100%, 50%)'  # Green for high, red for low
+        color = f'hsl({color_ratio * 120}, 100%, 50%)'
 
         folium.CircleMarker(
             location=[row['Lat'], row['Lon']],
             radius=6,
-            popup=f"${price:,.0f}",
+            popup=f"Sold for ${price:,.0f} (model estimate: ${row['Predicted_Price']:,.0f})",
             color=color,
             fill=True,
             fillColor=color,
@@ -424,7 +448,9 @@ with tab2:
             weight=2
         ).add_to(m)
 
-    st.markdown("### Miami-Dade & Broward Properties Map")
+    st.markdown("### Miami-Dade & Broward Sales Map")
+    st.caption("Real sale prices of 100 held-out sales. Locations are ZIP-level (with small jitter), not exact addresses. "
+               "Click a marker to compare the sale price with the model's estimate.")
     map_data = st_folium(m, width=700, height=500, key="miami_map")
 
     # Filter stats to only the properties currently visible in the map viewport
@@ -440,14 +466,14 @@ with tab2:
         if len(in_view) > 0:
             view_data = in_view
 
-    st.markdown(f"### Market Insights ({len(view_data)} properties in view)")
+    st.markdown(f"### Sale Prices in View ({len(view_data)} sales)")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Median Price", f"${view_data['Predicted_Price'].median():,.0f}")
+        st.metric("Median Price", f"${view_data['Sale_Price'].median():,.0f}")
     with col2:
-        st.metric("Mean Price", f"${view_data['Predicted_Price'].mean():,.0f}")
+        st.metric("Mean Price", f"${view_data['Sale_Price'].mean():,.0f}")
     with col3:
-        st.metric("Price Range", f"${view_data['Predicted_Price'].max() - view_data['Predicted_Price'].min():,.0f}")
+        st.metric("Price Range", f"${view_data['Sale_Price'].max() - view_data['Sale_Price'].min():,.0f}")
 
 # ============================================================================
 # TAB 3: MODEL DIAGNOSTICS

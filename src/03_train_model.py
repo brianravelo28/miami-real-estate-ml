@@ -193,7 +193,7 @@ def save_evaluation_report(rmse, mae, r2, top_features):
     
     logger.info(f"✓ Saved evaluation report to {report_path}")
 
-def save_run_metadata(X_train, X_test, rmse, mae, r2):
+def save_run_metadata(X_train, X_test, y_train, y_test, rmse, mae, r2):
     """Record the environment and settings so version drift is visible later"""
     metadata = {
         'python': platform.python_version(),
@@ -204,6 +204,10 @@ def save_run_metadata(X_train, X_test, rmse, mae, r2):
         'random_state': RANDOM_STATE,
         'n_train': int(len(X_train)),
         'n_test': int(len(X_test)),
+        'n_records': int(len(X_train) + len(X_test)),
+        'price_min': round(float(np.expm1(min(y_train.min(), y_test.min())))),
+        'price_max': round(float(np.expm1(max(y_train.max(), y_test.max())))),
+        'neighborhood_shrinkage_k': NEIGHBORHOOD_SHRINKAGE_K,
         'n_features': int(X_train.shape[1]),
         'features': list(X_train.columns),
         'metrics': {'r2': round(float(r2), 4), 'mae_log': round(float(mae), 4), 'rmse_log': round(float(rmse), 4)},
@@ -236,7 +240,7 @@ def main():
     # Save
     save_model(model)
     save_evaluation_report(rmse, mae, r2, top_features)
-    save_run_metadata(X_train, X_test, rmse, mae, r2)
+    save_run_metadata(X_train, X_test, y_train, y_test, rmse, mae, r2)
     
     logger.info("\n" + "="*60)
     logger.info("✓ Step 3 Complete. Ready for SHAP analysis.")

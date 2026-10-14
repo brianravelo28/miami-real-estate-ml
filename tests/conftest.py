@@ -51,9 +51,21 @@ def prepared_df(raw_df):
 
 
 @pytest.fixture()
-def split_frames(prepared_df):
-    """Train/test frames with neighborhood features added, plus the pieces to rerun the step"""
-    train_df, test_df = features.split_data(prepared_df)
-    tr, te, zip_table, global_stats = features.add_neighborhood_features(train_df.copy(), test_df.copy())
+def two_county_df(prepared_df):
+    """Same data with a county column: the first five ZIPs in county 'A', the rest in 'B'"""
+    df = prepared_df.copy()
+    df['county_name'] = np.where(df['zip'].isin(sorted(df['zip'].unique())[:5]), 'A', 'B')
+    return df
+
+
+def make_frames(df, k):
+    train_df, test_df = features.split_data(df)
+    tr, te, zip_table, global_stats = features.add_neighborhood_features(train_df.copy(), test_df.copy(), k)
     return {'train_df': train_df, 'test_df': test_df, 'train': tr, 'test': te,
-            'zip_table': zip_table, 'global_stats': global_stats}
+            'zip_table': zip_table, 'global_stats': global_stats, 'k': k}
+
+
+@pytest.fixture(params=[0, 20], ids=['no-shrinkage', 'shrinkage-k20'])
+def split_frames(request, prepared_df):
+    """Train/test frames with neighborhood features, for both the legacy and the shrunk behavior"""
+    return make_frames(prepared_df, request.param)

@@ -19,7 +19,8 @@ from geopy.distance import geodesic
 from sklearn.model_selection import train_test_split
 
 from real_estate_config import (
-    BRICKELL, DOWNTOWN_MIAMI, FEATURE_COLS, MIAMI_BEACH, RANDOM_STATE, REFERENCE_YEAR, TEST_SIZE,
+    BRICKELL, DOWNTOWN_MIAMI, FEATURE_COLS, MIAMI_BEACH, NEIGHBORHOOD_SHRINKAGE_K, RANDOM_STATE,
+    REFERENCE_YEAR, TEST_SIZE,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,54 +130,101 @@ def split_data(df):
     return df.loc[train_idx].copy(), df.loc[test_idx].copy()
 
 
-def add_neighborhood_features(train_df, test_df):
+def add_neighborhood_features(train_df, test_df, shrinkage_k=None):
     """
     ZIP-level price stats built from TRAINING sales only.
       - test rows: stats over all training sales in their ZIP
       - training rows: leave-one-out (their own sale is excluded)
-    ZIPs with no (other) training sales fall back to global training stats.
+
+    shrinkage_k = 0 (legacy): raw ZIP stats; ZIPs with no (other) training sales fall back
+        to the global training stats.
+    shrinkage_k > 0: a ZIP's median and std are pulled toward its county's training median
+        and std with weight n/(n+k) on the ZIP's own n sales, so a ZIP with 2 sales leans
+        mostly on its county instead of on those 2 prices (a smoothing heuristic, not an
+        exact Bayesian estimate). The sales count stays the raw n. Training rows are
+        leave-one-out for both the ZIP and the county, so no row sees its own price.
     """
     logger.info("\n--- Neighborhood Features (train-only) ---")
+    k = NEIGHBORHOOD_SHRINKAGE_K if shrinkage_k is None else shrinkage_k
+
+    has_county = 'county_name' in train_df.columns and 'county_name' in test_df.columns
+
+    def county_of(df):
+        return df['county_name'] if has_county else pd.Series('ALL', index=df.index)
+
+    train_county, test_county = county_of(train_df), county_of(test_df)
 
     prices_by_zip = {z: g['lastSoldPrice'].to_numpy(dtype=float)
                      for z, g in train_df.groupby('zip')}
     all_train_prices = train_df['lastSoldPrice'].to_numpy(dtype=float)
+    prices_by_county = {c: train_df.loc[train_county == c, 'lastSoldPrice'].to_numpy(dtype=float)
+                        for c in train_county.unique()}
     global_stats = {
         'median': float(np.median(all_train_prices)),
         'std': float(np.std(all_train_prices, ddof=1)),
         'count': 0.0,
     }
 
-    def stats_from(prices):
-        if len(prices) == 0:
-            return global_stats['median'], global_stats['std'], 0.0
-        std = float(np.std(prices, ddof=1)) if len(prices) > 1 else global_stats['std']
-        return float(np.median(prices)), std, float(len(prices))
+    def spread(prices):
+        return float(np.std(prices, ddof=1)) if len(prices) > 1 else None
 
-    def build(df, leave_one_out):
+    def without_one(prices, price):
+        """Drop exactly one occurrence of `price` (a training row's own sale)"""
+        i = np.where(prices == float(price))[0]
+        return np.delete(prices, i[0]) if len(i) else prices
+
+    def county_prior(county, own_price):
+        prices = prices_by_county.get(county, all_train_prices)
+        if own_price is not None:
+            prices = without_one(prices, own_price)
+        if len(prices) == 0:
+            return global_stats['median'], global_stats['std']
+        std = spread(prices)
+        return float(np.median(prices)), global_stats['std'] if std is None else std
+
+    def stats_from(prices, county, own_price=None):
+        n = len(prices)
+        if k <= 0:
+            if n == 0:
+                return global_stats['median'], global_stats['std'], 0.0
+            std = spread(prices)
+            return float(np.median(prices)), global_stats['std'] if std is None else std, float(n)
+        prior_median, prior_std = county_prior(county, own_price)
+        if n == 0:
+            return prior_median, prior_std, 0.0
+        raw_std = spread(prices)
+        raw_std = prior_std if raw_std is None else raw_std
+        w = n / (n + k)
+        return (w * float(np.median(prices)) + (1 - w) * prior_median,
+                w * raw_std + (1 - w) * prior_std, float(n))
+
+    def build(df, counties, leave_one_out):
         rows = []
-        for _, r in df.iterrows():
+        for idx, r in df.iterrows():
             prices = prices_by_zip.get(r['zip'], np.array([]))
+            own = float(r['lastSoldPrice']) if leave_one_out else None
             if leave_one_out and len(prices) > 0:
-                # drop exactly one occurrence of this row's own sale price
-                i = np.where(prices == float(r['lastSoldPrice']))[0]
-                prices = np.delete(prices, i[0]) if len(i) else prices
-            rows.append(stats_from(prices))
+                prices = without_one(prices, own)
+            rows.append(stats_from(prices, counties.loc[idx], own))
         return pd.DataFrame(rows, index=df.index, columns=NEIGHBORHOOD_COLS)
 
-    train_df = train_df.join(build(train_df, leave_one_out=True))
-    test_df = test_df.join(build(test_df, leave_one_out=False))
+    train_df = train_df.join(build(train_df, train_county, leave_one_out=True))
+    test_df = test_df.join(build(test_df, test_county, leave_one_out=False))
     logger.info("✓ neighborhood_median_price, neighborhood_price_std, neighborhood_sales_count")
 
-    # Lookup table for the dashboard: full-train stats + ZIP centroids
-    zip_table = train_df.groupby('zip')['lastSoldPrice'].agg(
-        median='median', std='std', count='count')
-    zip_table['std'] = zip_table['std'].fillna(global_stats['std'])
-    centroids = pd.concat([train_df, test_df]).groupby('zip')[['lat', 'lon']].mean()
-    zip_table = centroids.join(zip_table, how='left')
-    zip_table['median'] = zip_table['median'].fillna(global_stats['median'])
-    zip_table['std'] = zip_table['std'].fillna(global_stats['std'])
-    zip_table['count'] = zip_table['count'].fillna(0.0)
+    # Lookup table for the dashboard: full-train stats (no leave-one-out) + ZIP centroids
+    everything = pd.concat([train_df, test_df])
+    centroids = everything.groupby('zip')[['lat', 'lon']].mean()
+    zip_county = (pd.concat([train_county, test_county]).groupby(everything['zip'])
+                  .agg(lambda s: s.mode().iloc[0]))
+    rows = []
+    for z in centroids.index:
+        prices = prices_by_zip.get(z, np.array([]))
+        median, std, count = stats_from(prices, zip_county[z])
+        rows.append({'median': median, 'std': std, 'count': count,
+                     'raw_median': float(np.median(prices)) if len(prices) else np.nan})
+    zip_table = centroids.join(pd.DataFrame(rows, index=centroids.index))
+    zip_table.insert(2, 'county', zip_county)
 
     return train_df, test_df, zip_table, global_stats
 
@@ -192,7 +240,7 @@ def make_xy(df):
     return X, y
 
 
-def build_datasets(df):
+def build_datasets(df, shrinkage_k=None):
     """
     Cleaned frame (step 1 output) -> everything step 2 saves.
     Returns a dict: X_train, y_train, X_test, y_test, zip_table, global_stats,
@@ -203,7 +251,8 @@ def build_datasets(df):
     df = engineer_flood_risk(df)
 
     train_df, test_df = split_data(df)
-    train_df, test_df, zip_table, global_stats = add_neighborhood_features(train_df, test_df)
+    train_df, test_df, zip_table, global_stats = add_neighborhood_features(
+        train_df, test_df, shrinkage_k)
 
     X_train, y_train = make_xy(train_df)
     X_test, y_test = make_xy(test_df)
@@ -225,6 +274,13 @@ def nearest_zip(zip_table, lat, lon):
     lon_scale = np.cos(np.radians(lat))
     dist = np.hypot(zip_table['lat'] - lat, (zip_table['lon'] - lon) * lon_scale)
     return dist.idxmin()
+
+
+def nearest_zip_with_distance(zip_table, lat, lon):
+    """Nearest ZIP (as in nearest_zip) and the geodesic miles from the point to its centroid"""
+    zip_code = nearest_zip(zip_table, lat, lon)
+    row = zip_table.loc[zip_code]
+    return zip_code, geodesic((lat, lon), (row['lat'], row['lon'])).miles
 
 
 def build_feature_row(beds, baths, sqft, property_age, is_condo, is_townhouse,

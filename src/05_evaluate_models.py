@@ -130,6 +130,65 @@ def fmt(res, key):
     return f"{res[key + '_mean']:.3f} ± {res[key + '_sd']:.3f}"
 
 
+SHRINKAGE_GRID = [0, 2, 5, 10, 20, 40]
+
+
+def shrinkage_study(dev_df, holdout_df):
+    """
+    How strongly to pull ZIP price stats toward the county's (features.add_neighborhood_features).
+    For each strength k: paired CV accuracy against k=0, plus how much a house's prediction moves
+    when its neighborhood inputs come from the *neighboring* ZIP instead (the "pin snapped to the
+    next ZIP over" effect the dashboard is exposed to).
+    Rule (fixed in advance): choose the largest k whose paired CV R2 change is within one standard
+    error of k=0, i.e. shrink as much as possible without a measurable accuracy cost.
+    """
+    splitter = RepeatedKFold(n_splits=CV_FOLDS, n_repeats=CV_REPEATS, random_state=RANDOM_STATE)
+    rows, base_r2 = [], None
+    for k in SHRINKAGE_GRID:
+        r2s, maes = [], []
+        for tr_idx, va_idx in splitter.split(dev_df):
+            tr, va, _, _ = fe.add_neighborhood_features(dev_df.iloc[tr_idx].copy(), dev_df.iloc[va_idx].copy(), k)
+            X_tr, y_tr = fe.make_xy(tr)
+            X_va, y_va = fe.make_xy(va)
+            pred = lgb_model({}, LIGHTGBM_NUM_ROUNDS).fit(X_tr, y_tr).predict(X_va)
+            r2s.append(r2_score(y_va, pred))
+            maes.append(mean_absolute_error(y_va, pred))
+        r2s, maes = np.array(r2s), np.array(maes)
+        if base_r2 is None:
+            base_r2 = r2s
+        paired = r2s - base_r2
+
+        tr, ho, zip_table, _ = fe.add_neighborhood_features(dev_df.copy(), holdout_df.copy(), k)
+        X_tr, y_tr = fe.make_xy(tr)
+        X_ho, y_ho = fe.make_xy(ho)
+        model = lgb_model({}, LIGHTGBM_NUM_ROUNDS).fit(X_tr, y_tr)
+        pred = model.predict(X_ho)
+        swings = []
+        for pos, (idx, row) in enumerate(ho.iterrows()):
+            others = zip_table.drop(index=row['zip'])
+            neighbor = others.loc[fe.nearest_zip(others, row['lat'], row['lon'])]
+            swapped = X_ho.loc[[idx]].copy()
+            swapped['neighborhood_median_price'] = neighbor['median']
+            swapped['neighborhood_price_std'] = neighbor['std']
+            swapped['neighborhood_sales_count'] = neighbor['count']
+            swings.append(abs(model.predict(swapped)[0] - pred[pos]))
+        swings = np.array(swings)
+        rows.append({
+            'k': k, 'cv_r2': r2s.mean(), 'cv_r2_sd': r2s.std(), 'cv_mae': maes.mean(),
+            'paired': paired.mean(), 'paired_se': (paired.std(ddof=1) / np.sqrt(len(paired))) if k else 0.0,
+            'holdout_r2': r2_score(y_ho, pred), 'swing_median': float(np.median(swings)),
+            'swing_p90': float(np.quantile(swings, 0.9)),
+        })
+        logger.info(f"  k={k:<3} CV R2 {rows[-1]['cv_r2']:.3f}  paired vs k=0 {rows[-1]['paired']:+.4f} "
+                    f"± {rows[-1]['paired_se']:.4f}   neighbor-ZIP swing: median {rows[-1]['swing_median']:.3f}, "
+                    f"p90 {rows[-1]['swing_p90']:.3f} (log price)")
+
+    eligible = [r['k'] for r in rows if r['k'] == 0 or r['paired'] >= -r['paired_se']]
+    chosen = max(eligible)
+    logger.info(f"  rule picks k={chosen}; real_estate_config.NEIGHBORHOOD_SHRINKAGE_K = {NEIGHBORHOOD_SHRINKAGE_K}")
+    return rows, chosen
+
+
 def main():
     t0 = time.time()
     logging.disable(logging.INFO)  # silence the feature code's step logging
@@ -167,6 +226,12 @@ def main():
         results[name] = cv_score(factory, folds)
         logger.info(f"  {name:<34} CV R2 {fmt(results[name], 'r2')}   MAE {fmt(results[name], 'mae')}")
 
+    # How strongly to shrink ZIP price stats toward the county's
+    logger.info("\nNeighborhood shrinkage study (paired CV vs no shrinkage; ZIP-swap sensitivity on the holdout) ...")
+    logging.disable(logging.INFO)
+    shrink_rows, shrink_choice = shrinkage_study(dev_df, holdout_df)
+    logging.disable(logging.NOTSET)
+
     # Small random search, scored with the same CV folds
     logger.info(f"\nRandom hyperparameter search: {SEARCH_ITERATIONS} configs x {len(folds)} folds ...")
     rng = np.random.default_rng(SEARCH_SEED)
@@ -198,11 +263,13 @@ def main():
         logger.info(f"{name:<34}{fmt(r, 'r2'):>16}{fmt(r, 'mae'):>16}{r['train_r2']:>10.3f}{h['r2']:>12.3f}{h['mae']:>13.3f}")
     logger.info("=" * 70)
 
-    write_report(results, holdout, factories, best_params, best_rounds, trials, len(dev_df), len(holdout_df))
+    write_report(results, holdout, factories, best_params, best_rounds, trials, len(dev_df), len(holdout_df),
+                 shrink_rows, shrink_choice)
     logger.info(f"Done in {time.time() - t0:.0f}s. Report: {os.path.join(REPORTS_DIR, 'model_comparison.md')}")
 
 
-def write_report(results, holdout, factories, best_params, best_rounds, trials, n_dev, n_holdout):
+def write_report(results, holdout, factories, best_params, best_rounds, trials, n_dev, n_holdout,
+                 shrink_rows, shrink_choice):
     lines = [
         "# Model Comparison",
         "",
@@ -227,6 +294,24 @@ def write_report(results, holdout, factories, best_params, best_rounds, trials, 
         lines.append(f"| {name} | {fmt(r, 'r2')} | {fmt(r, 'mae')} | {r['train_r2']:.3f} | "
                      f"{h['r2']:.3f} | {h['mae']:.3f} |")
     lines += [
+        "",
+        "## Neighborhood shrinkage",
+        "ZIP price stats can be pulled toward the county's: a ZIP's median/std get weight n/(n+k) on its own "
+        "n training sales and the rest on the county. Accuracy is paired against k=0 over the same CV folds. "
+        "\"Swing\" is how much a holdout house's predicted log price moves when its neighborhood inputs "
+        "come from the neighboring ZIP instead of its own (what happens when a map pin snaps to the next ZIP over; "
+        "0.10 is about 10%).",
+        "",
+        "| k | CV R² | Paired ΔR² vs k=0 (± se) | Holdout R² | Swing: median | Swing: 90th pct |",
+        "|---|-------|--------------------------|------------|---------------|-----------------|",
+    ] + [
+        f"| {r['k']} | {r['cv_r2']:.3f} | {r['paired']:+.4f} ± {r['paired_se']:.4f} | {r['holdout_r2']:.3f} | "
+        f"{r['swing_median']:.3f} | {r['swing_p90']:.3f} |" for r in shrink_rows
+    ] + [
+        "",
+        f"Rule (fixed in advance): the largest k whose paired CV change is within one standard error of k=0. "
+        f"It picks k={shrink_choice}; `NEIGHBORHOOD_SHRINKAGE_K` is {NEIGHBORHOOD_SHRINKAGE_K}. Shrinkage reduces the "
+        "swing without a measurable accuracy cost, but does not remove it.",
         "",
         "## Hyperparameter search",
         f"- {SEARCH_ITERATIONS} random LightGBM configurations, each scored with the same CV folds.",

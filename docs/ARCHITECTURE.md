@@ -47,6 +47,8 @@ Kaggle CSV: Florida Real Estate Sold 2026 (10,893 statewide records)
 
 ### 1. Data ingestion (`src/01_load_data.py`)
 
+The cleaning rules live in `src/data_prep.py` (ZIP normalization, county filtering, outliers), which `01_load_data.py` wraps; they are covered by `tests/test_data_prep.py`.
+
 **Input**: `data/florida_sold_2026.csv` (statewide), config from `src/real_estate_config.py`.
 
 1. Load the CSV.
@@ -69,13 +71,14 @@ Builds the 16 modeling features listed in `FEATURE_COLS` (see [DATA_SCHEMA.md](D
 
 - **Property**: beds, baths, sqft, sqft_log, property_age, is_condo, is_townhouse
 - **Geospatial**: lat, lon, distances to downtown Miami, Brickell, and Miami Beach (geodesic miles)
-- **Neighborhood** (grouped by ZIP): median price, price std, sales count, from **training sales only**
+- **Neighborhood** (grouped by ZIP): median price, price std, sales count, from **training sales only**; the median and std are blended toward the ZIP's county (shrinkage, below)
 - **Risk**: flood_risk_percentile (latitude-based proxy)
 
 Leakage safeguards:
 - No feature is computed from the sale price of the row it describes (an earlier version used `price_per_sqft` and `list_to_sold_ratio`, which leaked the target).
 - The split (80/20, `random_state=42`, stratified by price quartile) happens **before** any price-based statistic is computed.
-- Training rows get **leave-one-out** ZIP stats (their own sale is excluded); test rows and dashboard predictions use stats from all training sales in the ZIP. ZIPs with no other training sales fall back to the global training median/std with a count of 0.
+- Training rows get **leave-one-out** ZIP stats (their own sale is excluded); test rows and dashboard predictions use stats from all training sales in the ZIP. ZIPs with no other training sales use the county's training median/std (the global ones if the county is unknown) with a count of 0.
+- **Shrinkage** (`NEIGHBORHOOD_SHRINKAGE_K = 20`): a ZIP's median and std get weight n/(n+20) on its own n sales and the rest on the county's training median/std (leave-one-out for training rows, at both the ZIP and county level). The count stays the raw n. `k = 20` was chosen by the shrinkage study in `src/05_evaluate_models.py` (largest k whose paired CV cost stays within one standard error). The saved `zip_table` stores the blended `median`/`std` the model uses plus `raw_median`, `county`, and centroid `lat`/`lon`.
 - Constant columns (`sale_year`, `sale_month`) are no longer used.
 
 The target is `log1p(lastSoldPrice)`.
@@ -90,14 +93,14 @@ Test-set results:
 
 | Metric | Value |
 |--------|-------|
-| RMSE (log scale) | 0.3418 |
-| MAE (log scale) | 0.2466 (≈ 28.0% price error) |
-| R² (test) | 0.8191 |
-| R² (train) | 0.9677 |
+| RMSE (log scale) | 0.3400 |
+| MAE (log scale) | 0.2454 (≈ 27.8% price error) |
+| R² (test) | 0.8210 |
+| R² (train) | 0.9680 |
 
-The gap between train and test R² shows some overfitting on the small training set. The 10th–90th percentile of test errors corresponds to roughly ×0.73 to ×1.66 of the predicted price, which the dashboard shows as its "typical range".
+The gap between train and test R² shows some overfitting on the small training set. The 10th–90th percentile of test errors corresponds to roughly ×0.71 to ×1.63 of the predicted price, which the dashboard shows as its "typical range".
 
-Top features by gain: `sqft` (1980), `sqft_log` (362), `baths` (234), `lat` (213), `neighborhood_price_std` (210).
+Top features by gain: `sqft` (2019), `sqft_log` (330), `neighborhood_median_price` (330), `baths` (248), `lon` (201).
 
 **Outputs**: `models/lightgbm_miami_v1.pkl`, `reports/evaluation_report.txt`, `reports/residuals.png`, `reports/actual_vs_predicted.png`.
 
@@ -115,13 +118,13 @@ Streamlit app. On startup it loads the model and test split and computes SHAP va
 
 **Tab 1: Search & Predict**
 - Inputs: beds, baths, sqft, property age, property type.
-- Location: a crosshair fixed at the center of a Folium map; panning the map sets the point. The crosshair is red when the map is at zoom ≥ 10 and centered within the Miami-Dade/Broward bounding box, gray otherwise.
+- Location: a crosshair fixed at the center of a Folium map; panning the map sets the point. The crosshair is red when the map is at zoom ≥ 10, centered inside the Miami-Dade/Broward bounding box, **and** within `FAR_FROM_DATA_MILES` (5) of a ZIP centroid that has sales; gray otherwise. The rectangle alone also covers the Atlantic and the Everglades (a median of 11 miles from the nearest ZIP with sales), so the distance test is what actually says "we have data here". The readout shows the nearest ZIP and its distance.
 - Output: predicted price, a "typical range" (10th–90th percentile of the model's test errors), and a SHAP bar chart of the top 10 features for that prediction.
 - Neighborhood features are looked up from the nearest ZIP centroid in `feature_artifacts.pkl` (the same training-only stats the model saw); the whole feature row is built by `features.build_feature_row()`, the same code path as training (distances, flood percentile, column order).
 
 **Tab 2: Neighborhood Map**
-- Folium map of 100 sampled test properties, colored by predicted price.
-- Median, mean, and range stats recompute for the properties inside the current map view.
+- Folium map of 100 real held-out sales, colored by **actual** sale price; each marker's popup compares the sale price with the model's estimate.
+- Median, mean, and range of the sale prices in the current map view. The sidebar's record count, price range, and the Environment panel read from `models/model_metadata.json` instead of hardcoded text.
 
 **Tab 3: Diagnostics**
 - R², MAE, RMSE; residual plot; global SHAP feature importance (mean |SHAP|, top 10).
@@ -138,16 +141,17 @@ Deployed on Render's free tier (auto-deploys on push to `main`): https://miami-r
 
 ## Testing
 
-`python -m pytest` (needs `requirements-dev.txt`). 35 tests in `tests/`:
+`python -m pytest` (needs `requirements-dev.txt`). 59 tests in `tests/`, run on every push by GitHub Actions (`.github/workflows/tests.yml`, Python 3.14 with unpinned-minor libraries, i.e. the production setup) and verified locally on both Python 3.9/pandas 2 and Python 3.14/pandas 3:
 
 | File | Covers |
 |------|--------|
-| `tests/test_features.py` | Leakage guards (test-set prices change no feature; training rows never see their own price; neighborhood stats equal hand-computed leave-one-out / training-only values; unseen ZIPs use global fallback), flood percentile equals pandas rank, nearest-ZIP lookup, and **train/serve parity** (`build_feature_row` equals the pipeline's row for the same property). Uses a small synthetic dataset, so it runs in a few seconds with no data files. |
+| `tests/test_features.py` | Leakage guards (test-set prices change no feature; training rows never see their own price; neighborhood stats equal independently hand-computed leave-one-out / training-only values both with and without county shrinkage, including per-county priors; unseen ZIPs use the prior), flood percentile equals pandas rank, nearest-ZIP lookup, and **train/serve parity** (`build_feature_row` equals the pipeline's row for the same property). Uses a small synthetic dataset, so it runs in a few seconds with no data files. |
+| `tests/test_data_prep.py` | Step 1 rules with a fake geocoder: float and missing ZIPs, county filter vs ZIP prefix (a Palm Beach ZIP inside the bounding box), the mislabeled-ZIP bounding box, unknown ZIPs, price/size outliers, missing-field drops, renamed columns, seeded jitter applied once. |
 | `tests/test_reproducibility.py` | Seeded coordinate jitter is deterministic (and doesn't mutate its input), LightGBM training is deterministic, and the saved `model_metadata.json` has the expected fields. |
 | `tests/test_requirements.py` | Every package in `requirements.txt` has a minimum version and an upper bound at the next major version, and `.python-version` is a full `x.y.z`. |
 | `tests/test_artifacts.py` | The committed model, lookup tables, and train/test pickles: columns match `FEATURE_COLS`, lookups are well formed, an end-to-end prediction is plausible, and re-running the feature step reproduces the saved matrices. Skips if a file is missing (e.g. a fresh clone without Git LFS). |
 
-As a sanity check on the tests themselves, four deliberate bugs were introduced one at a time (test prices leaking into stats, no leave-one-out, a wrong landmark and a different flood percentile in the dashboard path) and each was caught by a failing test. There is no CI yet; tests are run by hand.
+As a sanity check on the tests themselves, deliberate bugs were introduced one at a time in the feature code (test prices leaking into stats, no leave-one-out, wrong shrinkage weight or prior, a mismatch between the dashboard and pipeline paths) and in step 1 (ZIP-prefix filtering, no bounding box, float ZIPs, no outlier filter, double jitter); each was caught by a failing test. One of the first attempts missed the prefix bug because the test data hid it behind the bounding box, which is now fixed.
 
 **Reproducibility:** `python run_pipeline.py` was run twice end to end and every output (cleaned data, train/test matrices, lookups, model predictions) was identical. Library versions are recorded in `models/model_metadata.json` and shown in the dashboard's Environment panel; see the README.
 

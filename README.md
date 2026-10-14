@@ -26,10 +26,10 @@ This project demonstrates end-to-end applied ML: data acquisition → feature en
 
 | Metric | Value | Target | Status |
 |--------|-------|--------|--------|
-| **R² Score** | 0.8191 | ≥ 0.80 | ✅ |
-| **RMSE (log scale)** | 0.3418 | ≤ 0.20 | ❌ |
-| **MAE (log scale)** | 0.2466 | ≤ 0.18 | ❌ |
-| **Mean Price Error** | 28.0% | — | — |
+| **R² Score** | 0.8210 | ≥ 0.80 | ✅ |
+| **RMSE (log scale)** | 0.3400 | ≤ 0.20 | ❌ |
+| **MAE (log scale)** | 0.2454 | ≤ 0.18 | ❌ |
+| **Mean Price Error** | 27.8% | — | — |
 
 Evaluated on 198 held-out sales. Training R² is 0.968, so the model overfits somewhat on this small (792-row) training set. An earlier version reported R² = 0.992, but that came from features computed from the sale price (target leakage), which have since been removed (see [Methodology](docs/METHODOLOGY.md)).
 
@@ -41,12 +41,16 @@ A single 198-row split is noisy, so `src/05_evaluate_models.py` compares models 
 |-------|-------------------|------------|
 | Predict the mean | -0.010 ± 0.012 | 0.000 |
 | Linear (property features only) | 0.606 ± 0.041 | 0.544 |
-| Ridge (all 16 features) | 0.766 ± 0.031 | 0.728 |
-| Random forest | 0.818 ± 0.031 | 0.793 |
-| **LightGBM (current config)** | **0.828 ± 0.030** | **0.819** |
-| LightGBM (tuned, 40-config random search) | 0.837 ± 0.030 | 0.816 |
+| Ridge (all 16 features) | 0.761 ± 0.032 | 0.727 |
+| Random forest | 0.815 ± 0.032 | 0.803 |
+| **LightGBM (current config)** | **0.827 ± 0.024** | **0.821** |
+| LightGBM (tuned, 40-config random search) | 0.836 ± 0.027 | 0.827 |
 
-Takeaways: location and neighborhood features lift R² from 0.61 to 0.77 (Ridge), and tree models add roughly another 0.05–0.06. The tuning search found nothing meaningfully better (+0.01 in CV, within noise, and no gain on the holdout), so the current config stays. The train/test gap is not something these hyperparameters fix; more data or better features are the lever. Full details: [`reports/model_comparison.md`](reports/model_comparison.md).
+Takeaways: location and neighborhood features lift R² from 0.61 to 0.76 (Ridge), and tree models add roughly another 0.06–0.07. The tuning search found nothing meaningfully better (+0.01 in CV and +0.006 on the holdout, both well within noise), so the current config stays. The train/test gap is not something these hyperparameters fix; more data or better features are the lever. Full details: [`reports/model_comparison.md`](reports/model_comparison.md).
+
+### Neighborhood stats: shrinkage toward the county
+
+ZIP price stats are noisy (about 6 training sales per ZIP), so each ZIP's median and std are blended toward its county's, with weight n/(n+20) on the ZIP's own n sales (`NEIGHBORHOOD_SHRINKAGE_K`). The setting comes from the same cross-validation script: the largest value whose paired accuracy cost stayed within one standard error. It costs no measurable accuracy and reduces how much a house's estimate moves when its neighborhood inputs come from the neighboring ZIP (median swing about 10% → 9%, 90th-percentile swing about 34% → 27% on the holdout), but it does not remove that sensitivity, and for one specific example (the default map position) the gap between the two nearest ZIPs actually grew. Treat location-driven differences of ±10–20% between neighboring ZIPs as noise.
 
 **Top 3 Features** (by model gain):
 1. `sqft` — Property size
@@ -115,6 +119,7 @@ python -m pytest
 The suite (`tests/`) checks the things that went wrong earlier in this project:
 - **No target leakage**: changing a test-set sale price changes no feature; a training row never sees its own price (leave-one-out); price-derived features can't be added back to `FEATURE_COLS`.
 - **Train/serve parity**: the dashboard's single-row feature builder returns exactly what the training pipeline produces for the same property.
+- **Step 1 data rules** (`tests/test_data_prep.py`, fake geocoder, runs offline): float ZIPs, county filtering instead of ZIP prefixes, the mislabeled-ZIP bounding box, outlier rules.
 - **Saved files**: the committed model, lookups, and train/test matrices load, match the feature list, predict sensibly, and are reproducible from step 1's output (these skip if a file is missing).
 
 ---
@@ -128,12 +133,12 @@ miami-real-estate-ml/
 ├── app.py                             # Streamlit dashboard (entry point)
 ├── requirements.txt                   # Python dependencies
 ├── requirements-dev.txt               # Adds pytest for the test suite
-├── render.yaml, Dockerfile            # Deployment config
 ├── .gitignore                         # Git ignore rules
 ├── run_pipeline.py                    # Master executor
 │
 ├── src/
 │   ├── 01_load_data.py                # Step 1: Load, geocode & validate data
+│   ├── data_prep.py                   # Step 1 rules: ZIP cleaning, county filter, outliers (tested)
 │   ├── features.py                    # Feature code shared by the pipeline AND the dashboard
 │   ├── 02_engineer_features.py        # Step 2: Feature engineering (thin script around features.py)
 │   ├── 03_train_model.py              # Step 3: Train LightGBM
@@ -141,7 +146,7 @@ miami-real-estate-ml/
 │   ├── 05_evaluate_models.py          # Step 5 (optional): CV, baselines, hyperparameter search
 │   └── real_estate_config.py          # Single source of truth (paths, params)
 │
-├── tests/                             # pytest suite (leakage guards, train/serve parity)
+├── tests/                             # pytest suite (leakage guards, parity, step 1 rules, reproducibility)
 │
 ├── data/
 │   ├── acquisition.md                 # How to download dataset
@@ -194,13 +199,13 @@ The Streamlit app (`streamlit run app.py`) provides three tabs:
 
 ### 🔍 **Tab 1: Search & Predict**
 - Input property details (beds, baths, sqft, property type)
-- Pick a location by panning a map under a fixed crosshair (active within Miami-Dade/Broward)
+- Pick a location by panning a map under a fixed crosshair (turns red only inside Miami-Dade/Broward and within 5 miles of a ZIP that has sales; open water and the Everglades stay gray)
 - Get a price prediction with a "typical range" based on the model's held-out errors
 - View a SHAP bar chart of the features driving that prediction
 
 ### 🗺️ **Tab 2: Neighborhood Map**
-- Interactive Folium map of predicted prices across Miami-Dade & Broward
-- Median, mean, and range stats that update to the properties in the current map view
+- Interactive Folium map of 100 real held-out sales, colored by actual sale price (click a marker to see the model's estimate for that sale)
+- Median, mean, and range of the sale prices in the current map view
 
 ### 📈 **Tab 3: Model Diagnostics**
 - R² score, RMSE, MAE breakdown
@@ -284,9 +289,9 @@ Example: "This property is predicted above the baseline mainly because it is lar
 ## 🔬 Model Limitations & Next Steps
 
 ### Current Limitations
-- **Modest accuracy**: ~28% average price error (an 80% error band of roughly -27% to +66%), with a noticeable train/test gap; the dashboard shows this as a wide "typical range" instead of a point estimate alone
+- **Modest accuracy**: ~28% average price error (an 80% error band of roughly -29% to +63%), with a noticeable train/test gap; the dashboard shows this as a wide "typical range" instead of a point estimate alone
 - **Sparse neighborhood stats**: ZIP statistics come from ~6 training sales per ZIP on average (4 ZIPs have none), so they are noisy
-- The dashboard maps the pin to the nearest ZIP centroid in the data to look up those stats
+- The dashboard maps the pin to the nearest ZIP centroid in the data to look up those stats. How well a real map pin finds its real ZIP cannot be measured here: the data has no real addresses (coordinates are ZIP centroids plus jitter), so the nearest-centroid lookup looks almost perfect on the test set for circular reasons. The headline metrics assume the correct ZIP.
 - Trained only on Miami-Dade & Broward 2026 data; may not generalize to other areas/years
 - Geospatial features use ZIP-code centroids (plus small seeded jitter), not exact property addresses
 - The jitter draw matters a little: with a different random seed the test R² moves by a few hundredths (0.826 vs 0.819 between two earlier runs), which is the same size as the cross-validation noise

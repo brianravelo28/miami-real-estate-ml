@@ -36,8 +36,9 @@ def test_saved_matrices_use_the_feature_list():
 def test_lookup_artifacts_are_well_formed():
     art = load(FEATURE_ARTIFACTS_PATH)
     table = art['zip_table']
-    assert {'lat', 'lon', 'median', 'std', 'count'} <= set(table.columns)
-    assert not table.isna().any().any()
+    assert {'lat', 'lon', 'county', 'median', 'std', 'count', 'raw_median'} <= set(table.columns)
+    assert not table[['lat', 'lon', 'median', 'std', 'count']].isna().any().any()
+    assert not table.loc[table['count'] > 0, 'raw_median'].isna().any()
     ref = np.asarray(art['flood_proxy_sorted'])
     assert (np.diff(ref) >= 0).all(), "flood reference must be sorted ascending"
 
@@ -64,7 +65,11 @@ def test_saved_features_match_a_fresh_rebuild():
     """Re-running step 2 on step 1's output must reproduce the saved training and test files"""
     cleaned = load(FEATURES_PATH)
     out = features.build_datasets(cleaned)
-    pd.testing.assert_frame_equal(out['X_train'], load(TRAIN_DATA_PATH))
-    pd.testing.assert_frame_equal(out['X_test'], load(TEST_DATA_PATH))
+    # Library versions legitimately change dtypes without changing values (pandas 3 labels columns
+    # with a string dtype; NumPy 2 makes int columns int64 where NumPy 1 on Windows gave int32),
+    # so compare names and values, not storage types.
+    kw = dict(check_column_type=False, check_dtype=False)
+    pd.testing.assert_frame_equal(out['X_train'], load(TRAIN_DATA_PATH), **kw)
+    pd.testing.assert_frame_equal(out['X_test'], load(TEST_DATA_PATH), **kw)
     pd.testing.assert_series_equal(out['y_train'], load(TRAIN_TARGET_PATH))
     pd.testing.assert_series_equal(out['y_test'], load(TEST_TARGET_PATH))

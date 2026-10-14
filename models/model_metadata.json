@@ -7,6 +7,10 @@
   "random_state": 42,
   "n_train": 792,
   "n_test": 198,
+  "n_records": 990,
+  "price_min": 65000,
+  "price_max": 9900000,
+  "neighborhood_shrinkage_k": 20,
   "n_features": 16,
   "features": [
     "beds",
@@ -27,8 +31,8 @@
     "flood_risk_percentile"
   ],
   "metrics": {
-    "r2": 0.8191,
-    "mae_log": 0.2466,
-    "rmse_log": 0.3418
+    "r2": 0.821,
+    "mae_log": 0.2454,
+    "rmse_log": 0.34
   }
 }

@@ -8,20 +8,20 @@ Because the model predicts **log price**, SHAP values are in log-price units. A 
 ## Reading the dashboard's SHAP chart
 - **Bars** are individual features' contributions to this prediction (top 10 by magnitude).
 - **Positive** bars increase the predicted price; **negative** bars decrease it.
-- The base value is about 13.20 in log space (roughly $540,638); the contributions sum to the final log prediction.
+- The base value is about 13.20 in log space (roughly $540,755); the contributions sum to the final log prediction.
 
 ## Top Features (mean absolute SHAP value, test set)
 
 | Rank | Feature | Mean abs SHAP |
 |------|---------|---------------|
-| 1 | `sqft` | 0.348 |
-| 2 | `is_condo` | 0.103 |
-| 3 | `lon` | 0.088 |
-| 4 | `sqft_log` | 0.065 |
-| 5 | `dist_downtown` | 0.060 |
-| 6 | `lat` | 0.058 |
-| 7 | `neighborhood_price_std` | 0.054 |
-| 8 | `property_age` | 0.052 |
+| 1 | `sqft` | 0.353 |
+| 2 | `is_condo` | 0.098 |
+| 3 | `lon` | 0.085 |
+| 4 | `neighborhood_median_price` | 0.075 |
+| 5 | `sqft_log` | 0.060 |
+| 6 | `dist_downtown` | 0.060 |
+| 7 | `property_age` | 0.055 |
+| 8 | `neighborhood_price_std` | 0.051 |
 
 ## Limitations
 - SHAP assumes features can be varied independently, which doesn't hold for correlated features like `sqft`/`sqft_log` or `lat`/`lon`.

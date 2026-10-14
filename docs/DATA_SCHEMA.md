@@ -8,7 +8,7 @@
 | Column | Type | Null % (raw) | Description |
 |--------|------|--------------|-------------|
 | `type` | string | 0.0 | Property category (`single_family`, `condos`, `townhomes`, `land`, ...) |
-| `sub_type` | string | 77.3 | Detail for some rows (`condo`, `townhouse`); used for the type dummies |
+| `sub_type` | string | 77.3 | `condo` or `townhouse`; filled in only for condos and townhomes and blank by design for single-family, multi-family, mobile, and land, so the high null rate is structural, not missing data. Used for the type dummies |
 | `listPrice` | float | 0.1 | Listing price (USD), not used as a feature |
 | `lastSoldPrice` | int | 0.0 | Sale price (USD), the **target** |
 | `sqft` | float | 6.9 | Living area (sq ft) |
@@ -61,14 +61,17 @@ Computed per ZIP **after** the train/test split:
 
 | Feature | Definition |
 |---------|-----------|
-| `neighborhood_median_price` | Median sale price of training sales in the ZIP |
-| `neighborhood_price_std` | Std of training sale prices in the ZIP |
-| `neighborhood_sales_count` | Number of training sales in the ZIP |
+| `neighborhood_median_price` | Median sale price of training sales in the ZIP, blended toward the county median (shrinkage, below) |
+| `neighborhood_price_std` | Std of training sale prices in the ZIP, blended toward the county std |
+| `neighborhood_sales_count` | Raw number of training sales in the ZIP (not shrunk) |
+
+Shrinkage (`NEIGHBORHOOD_SHRINKAGE_K = 20`): with n training sales in the ZIP, `value = n/(n+20) × ZIP value + 20/(n+20) × county value`. A ZIP with 6 sales is therefore about 77% county. See METHODOLOGY for how k was chosen.
 
 How each row gets its values:
 - **Test rows** (and dashboard predictions): stats from all training sales in the row's ZIP.
 - **Training rows**: leave-one-out, i.e. the same stats with the row's own sale excluded, so the model can't learn from its own target.
-- **ZIPs with no (other) training sales**: global training median and std, with count 0. A ZIP with exactly one other sale uses the global std (a single value has no spread).
+- **ZIPs with no (other) training sales**: the county's training median and std (global if the county is unknown), with count 0. A ZIP with exactly one other sale uses the county std for its own spread (a single value has none).
+- **County prior**: the county median/std of training sales; for training rows it also excludes the row's own sale.
 
 ### Risk (1)
 
@@ -99,7 +102,7 @@ How each row gets its values:
 | Std | $956,133 |
 | Min / Max | $65,000 / $9,900,000 |
 
-The model is trained on `log1p(lastSoldPrice)` (mean 13.19, std 0.80). Convert predictions back with `np.expm1`. Errors in log space approximate percentage errors: a log MAE of 0.247 ≈ 28.0%.
+The model is trained on `log1p(lastSoldPrice)` (mean 13.19, std 0.80). Convert predictions back with `np.expm1`. Errors in log space approximate percentage errors: a log MAE of 0.245 ≈ 27.8%.
 
 ---
 
@@ -110,7 +113,7 @@ The model is trained on `log1p(lastSoldPrice)` (mean 13.19, std 0.80). Convert p
 | `data/features_engineered.pkl` | (990, 18) cleaned frame from step 1 |
 | `data/X_train.pkl` / `y_train.pkl` | (792, 16) / (792,): training features / log target |
 | `data/X_test.pkl` / `y_test.pkl` | (198, 16) / (198,): test features / log target |
-| `data/feature_artifacts.pkl` | Dict: `zip_table` (per-ZIP centroid lat/lon plus training median/std/count for 128 ZIPs), `global_stats` (fallback median/std/count), `flood_proxy_sorted` (sorted latitude-proxy values for percentile lookups) |
+| `data/feature_artifacts.pkl` | Dict: `zip_table` (per ZIP: centroid `lat`/`lon`, `county`, the blended `median`/`std` the model uses, raw `count`, and `raw_median` for display; 128 ZIPs), `global_stats` (fallback median/std/count), `flood_proxy_sorted` (sorted latitude-proxy values for percentile lookups) |
 | `models/lightgbm_miami_v1.pkl` | Trained LightGBM model |
 
 ```python
@@ -140,8 +143,8 @@ lon                          -80.25      0.106     -80.64     -80.09
 dist_downtown                  18.7       10.4       0.09       43.0
 dist_brickell                  18.9       10.4       0.13       42.8
 dist_beach                     18.9       9.67       0.07       47.2
-neighborhood_median_price   643,269    475,684    120,000  4,625,000
-neighborhood_price_std      538,052    615,865          0  4,085,410
+neighborhood_median_price   553,929    125,478    366,000    996,552
+neighborhood_price_std      837,310    235,624    501,183  1,724,193
 neighborhood_sales_count       7.9        4.8        0.0       24.0
 flood_risk_percentile          0.50       0.24       0.35       1.00
 ```

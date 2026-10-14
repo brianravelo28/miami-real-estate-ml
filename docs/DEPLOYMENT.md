@@ -35,19 +35,7 @@ The pickles are excluded by `.gitignore` but committed anyway (`git add -f`, tra
    - **Plan**: Free
 4. Deploy. Every push to `main` triggers a redeploy.
 
-`render.yaml` in the repo mirrors these settings.
-
----
-
-## Docker (optional)
-
-```bash
-docker build -t miami-real-estate-ml .
-docker run -p 8501:8501 miami-real-estate-ml
-# open http://localhost:8501
-```
-
-The `Dockerfile` copies only the files listed above, so it works for any container host (Cloud Run, Fly.io, ECS, etc.).
+These settings live in the Render dashboard; the repo has no `render.yaml`.
 
 ---
 
@@ -56,8 +44,6 @@ The `Dockerfile` copies only the files listed above, so it works for any contain
 | Platform | Cost | Notes |
 |----------|------|-------|
 | **Streamlit Community Cloud** | Free | Simplest for Streamlit apps; connects directly to the GitHub repo |
-| **Hugging Face Spaces** | Free | Works with the Docker SDK, but free CPU quota is limited |
-| **Cloud Run / Fly.io** | Pay-per-use | Use the Dockerfile |
 
 ---
 

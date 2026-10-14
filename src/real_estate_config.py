@@ -34,7 +34,6 @@ MODEL_METADATA_PATH = os.path.join(MODELS_DIR, 'model_metadata.json')
 
 # Report files
 SHAP_SUMMARY_PATH = os.path.join(REPORTS_DIR, 'shap_summary.png')
-SHAP_FORCE_EXAMPLE_PATH = os.path.join(REPORTS_DIR, 'shap_force_example.png')
 RESIDUAL_PLOT_PATH = os.path.join(REPORTS_DIR, 'residuals.png')
 
 # ============================================================================
@@ -69,17 +68,14 @@ MAX_SQFT = 10_000  # Remove properties > 10K sqft
 # ============================================================================
 REFERENCE_YEAR = 2026
 
-# Binning edges for property age
-PROPERTY_AGE_BINS = [0, 5, 20, 40, 200]
-PROPERTY_AGE_LABELS = ['new', 'recent', 'established', 'old']
+# Pulls a ZIP's price stats toward its county's: weight n/(n+k) on the ZIP's own n sales.
+# 0 = off (raw ZIP stats). 20 = the largest value whose paired cross-validated accuracy cost
+# stayed within one standard error (see the shrinkage study in src/05_evaluate_models.py).
+NEIGHBORHOOD_SHRINKAGE_K = 20
 
-# Flood zone encoding (ordinal: lower = less risk)
-FLOOD_ZONE_ENCODING = {
-    'X': 0,    # No risk
-    'A': 1,    # Risk zones
-    'AE': 2,
-    'VE': 3,   # Highest risk (coastal high hazard)
-}
+# Dashboard: a pin farther than this from the nearest ZIP centroid with sales is treated as
+# outside the area we have data for. Urban ZIP centroids are ~2 miles apart (p90 ~3 miles).
+FAR_FROM_DATA_MILES = 5.0
 
 # ============================================================================
 # MODEL PARAMETERS (LightGBM)
@@ -113,13 +109,6 @@ FEATURE_COLS = [
     # Flood risk (latitude proxy)
     'flood_risk_percentile',
 ]
-
-# ============================================================================
-# DASHBOARD CONFIG
-# ============================================================================
-DASH_HOST = '0.0.0.0'
-DASH_PORT = 7860
-DASH_DEBUG = True
 
 # ============================================================================
 # SUCCESS CRITERIA
